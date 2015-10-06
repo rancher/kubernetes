@@ -526,6 +526,10 @@
 			"Rev": "8096f47503459bcc74d1f4c487b7e6e42e5746b5"
 		},
 		{
+			"ImportPath": "github.com/gorilla/websocket",
+			"Rev": "13e4d0621caa4d77fd9aa470ef6d7ab63d1a5e41"
+		},
+		{
 			"ImportPath": "github.com/imdario/mergo",
 			"Comment": "0.1.3-8-g6633656",
 			"Rev": "6633656539c1639d9d78127b7d47c622b5d7b6dc"
@@ -652,6 +656,11 @@
 			"ImportPath": "github.com/rackspace/gophercloud",
 			"Comment": "v1.0.0-665-gf928634",
 			"Rev": "f92863476c034f851073599c09d90cd61ee95b3d"
+		},
+		{
+			"ImportPath": "github.com/rancher/go-rancher/client",
+			"Comment": "v0.1.0-69-g179d8a4",
+			"Rev": "179d8a42a477d2de0a4e7a4f5a99df67d80ed1d8"
 		},
 		{
 			"ImportPath": "github.com/russross/blackfriday",
