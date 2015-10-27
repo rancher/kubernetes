@@ -530,6 +530,10 @@
 			"Rev": "13e4d0621caa4d77fd9aa470ef6d7ab63d1a5e41"
 		},
 		{
+			"ImportPath": "github.com/hashicorp/golang-lru",
+			"Rev": "17e3543cc4e0b72d6c71d2e59e27a10821ea353b"
+		},
+		{
 			"ImportPath": "github.com/imdario/mergo",
 			"Comment": "0.1.3-8-g6633656",
 			"Rev": "6633656539c1639d9d78127b7d47c622b5d7b6dc"
