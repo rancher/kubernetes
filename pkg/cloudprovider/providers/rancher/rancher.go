@@ -516,13 +516,13 @@ func (r *CloudProvider) NodeAddresses(name string) ([]api.NodeAddress, error) {
 
 // ExternalID returns the cloud provider ID of the specified instance (deprecated).
 func (r *CloudProvider) ExternalID(name string) (string, error) {
-	glog.Info("ExternalID [%s]", name)
+	glog.Infof("ExternalID [%s]", name)
 	return r.InstanceID(name)
 }
 
 // InstanceID returns the cloud provider ID of the specified instance.
 func (r *CloudProvider) InstanceID(name string) (string, error) {
-	glog.Info("InstanceID [%s]", name)
+	glog.Infof("InstanceID [%s]", name)
 	host, err := r.getHostByName(name)
 	if err != nil {
 		return "", err
