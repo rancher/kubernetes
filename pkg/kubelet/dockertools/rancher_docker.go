@@ -2,6 +2,7 @@ package dockertools
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
@@ -34,11 +35,19 @@ func isPodContainer(config *docker.Config) bool {
 }
 
 func (r *RancherDockerClient) CreateContainer(createOpts docker.CreateContainerOptions) (*docker.Container, error) {
-	if isPodContainer(createOpts.Config) {
-		if createOpts.Config.Labels == nil {
-			createOpts.Config.Labels = map[string]string{}
-		}
+	if createOpts.Config.Labels == nil {
+		createOpts.Config.Labels = map[string]string{}
+	}
+
+	podContainer := isPodContainer(createOpts.Config)
+	if podContainer {
 		createOpts.Config.Labels["io.rancher.container.network"] = "true"
+		createOpts.Config.Labels["io.rancher.service.launch.config"] = "io.rancher.service.primary.launch.config"
+	}
+
+	displayName := r.parseDisplayName(createOpts.Name, podContainer)
+	if displayName != "" {
+		createOpts.Config.Labels["io.rancher.container.display_name"] = displayName
 	}
 
 	return r.DockerInterface.CreateContainer(createOpts)
@@ -110,4 +119,19 @@ func (r *RancherDockerClient) setIp(container *docker.Container) (bool, error) {
 	}
 
 	return false, err
+}
+
+func (r *RancherDockerClient) parseDisplayName(fullName string, podContainer bool) string {
+	parts := strings.SplitN(fullName, "_", 4)
+	if len(parts) == 4 {
+		if podContainer {
+			return parts[2]
+		} else {
+			parts = strings.Split(parts[1], ".")
+			if len(parts) > 0 {
+				return parts[0]
+			}
+		}
+	}
+	return ""
 }
