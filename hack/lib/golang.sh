@@ -100,12 +100,13 @@ readonly KUBE_TEST_PORTABLE=(
 # in 'build/build-image/Dockerfile'
 readonly KUBE_CLIENT_PLATFORMS=(
   linux/amd64
-  linux/386
-  linux/arm
-  darwin/amd64
-  darwin/386
-  windows/amd64
 )
+# The following platforms have be removed for faster builds on the Rancher branch:
+#  linux/386
+#  linux/arm
+#  darwin/amd64
+#  darwin/386
+#  windows/amd64
 
 # Gigabytes desired for parallel platform builds. 11 is fairly
 # arbitrary, but is a reasonable splitting point for 2015
@@ -125,11 +126,13 @@ readonly KUBE_ALL_TARGETS=(
 )
 readonly KUBE_ALL_BINARIES=("${KUBE_ALL_TARGETS[@]##*/}")
 
+# Kubelet added to static builds for Rancher branch
 readonly KUBE_STATIC_LIBRARIES=(
   kube-apiserver
   kube-controller-manager
   kube-scheduler
   kube-proxy
+  kubelet
 )
 
 kube::golang::is_statically_linked_library() {
@@ -395,8 +398,9 @@ kube::golang::build_binaries_for_platform() {
         "${nonstatics[@]:+${nonstatics[@]}}"
     fi
     if [[ "${#statics[@]}" != 0 ]]; then
-      CGO_ENABLED=0 go install -installsuffix cgo "${goflags[@]:+${goflags[@]}}" \
-        -ldflags "${goldflags}" \
+      # We changed how static builds are done on Rancher branch. See history for details.
+      go install -a -tags netgo -installsuffix netgo "${goflags[@]:+${goflags[@]}}" \
+        -ldflags "-extldflags '-static' ${goldflags}" \
         "${statics[@]:+${statics[@]}}"
     fi
   fi
