@@ -37,6 +37,11 @@ func (r *CloudProvider) ProviderName() string {
 	return providerName
 }
 
+// ScrubDNS filters DNS settings for pods.
+func (r *CloudProvider) ScrubDNS(nameservers, searches []string) (nsOut, srchOut []string) {
+	return nameservers, searches
+}
+
 // TCPLoadBalancer returns an implementation of TCPLoadBalancer for Rancher
 func (r *CloudProvider) TCPLoadBalancer() (cloudprovider.TCPLoadBalancer, bool) {
 	return r, true
@@ -419,7 +424,7 @@ func (r *CloudProvider) getLBByName(name string) (*client.LoadBalancerService, e
 
 func (r *CloudProvider) toLBStatus(lb *client.LoadBalancerService) (*api.LoadBalancerStatus, bool, error) {
 	instAndHosts := &instanceCollection{}
-	err := getJSON(lb.Links["instances"], map[string][]string{"include": []string{"hosts"}}, instAndHosts)
+	err := getJSON(lb.Links["instances"], map[string][]string{"include": {"hosts"}}, instAndHosts)
 	if err != nil {
 		return nil, false, err
 	}
@@ -428,7 +433,7 @@ func (r *CloudProvider) toLBStatus(lb *client.LoadBalancerService) (*api.LoadBal
 	for _, i := range instAndHosts.Data {
 		for _, h := range i.Hosts {
 			hIP := &hostAndIPAddresses{}
-			err = getJSON(h.Links["self"], map[string][]string{"include": []string{"ipAddresses"}}, hIP)
+			err = getJSON(h.Links["self"], map[string][]string{"include": {"ipAddresses"}}, hIP)
 			if err != nil {
 				return nil, false, err
 			}
