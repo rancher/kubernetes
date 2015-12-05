@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"k8s.io/kubernetes/cmd/kubelet/app"
 	"k8s.io/kubernetes/pkg/util"
@@ -49,7 +50,7 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	cfg, err := config(s)
+	cfg, err := injectRancherCfg(s)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
@@ -61,8 +62,12 @@ func main() {
 	}
 }
 
-func config(s *app.KubeletServer) (*app.KubeletConfig, error) {
-	cfg, err := s.KubeletConfig()
+func injectRancherCfg(s *app.KubeletServer) (*app.KubeletConfig, error) {
+	if strings.ToLower(s.CloudProvider) != "rancher" {
+		return nil, nil
+	}
+
+	cfg, err := s.UnsecuredKubeletConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +75,12 @@ func config(s *app.KubeletServer) (*app.KubeletConfig, error) {
 	clientConfig, err := s.CreateAPIServerClientConfig()
 	if err == nil {
 		cfg.KubeClient, err = client.New(clientConfig)
+
+		// make a separate client for events
+		eventClientConfig := *clientConfig
+		eventClientConfig.QPS = s.EventRecordQPS
+		eventClientConfig.Burst = s.EventBurst
+		cfg.EventClient, err = client.New(&eventClientConfig)
 	}
 	if err != nil && len(s.APIServerList) > 0 {
 		glog.Warningf("No API client: %v", err)
@@ -90,6 +101,9 @@ func config(s *app.KubeletServer) (*app.KubeletConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// for rancher monitoring
+	cfg.DockerDaemonContainer = ""
 
 	cfg.DockerClient, err = dockertools.NewRancherClient(cfg.DockerClient, rancherClient)
 	return cfg, err
