@@ -48,7 +48,7 @@ import (
 // 5.  The volume path used by the Kubelet must be the same inside and outside
 //     the container and be writable by the container (to initialize volume)
 //     contents. TODO: remove this requirement.
-// 6.  The host image must have mount, findmnt, and umount binaries in /bin,
+// 6.  The host image must have mount, stat, and umount binaries in /bin,
 //     /usr/sbin, or /usr/bin
 //
 // For more information about mount propagation modes, see:
@@ -61,9 +61,9 @@ type NsenterMounter struct {
 func NewNsenterMounter() *NsenterMounter {
 	m := &NsenterMounter{
 		paths: map[string]string{
-			"mount":   "",
-			"findmnt": "",
-			"umount":  "",
+			"mount":  "",
+			"stat":   "",
+			"umount": "",
 		},
 	}
 	// search for the mount command in other locations besides /usr/bin
@@ -162,7 +162,7 @@ func (*NsenterMounter) List() ([]MountPoint, error) {
 	return listProcMounts(hostProcMountsPath)
 }
 
-// IsLikelyNotMountPoint determines whether a path is a mountpoint by calling findmnt
+// IsLikelyNotMountPoint determines whether a path is a mountpoint by calling stat
 // in the host's root mount namespace.
 func (n *NsenterMounter) IsLikelyNotMountPoint(file string) (bool, error) {
 	file, err := filepath.Abs(file)
@@ -170,20 +170,20 @@ func (n *NsenterMounter) IsLikelyNotMountPoint(file string) (bool, error) {
 		return true, err
 	}
 
-	args := []string{"--mount=/rootfs/proc/1/ns/mnt", "--", n.absHostPath("findmnt"), "-o", "target", "--noheadings", "--target", file}
-	glog.V(5).Infof("findmnt command: %v %v", nsenterPath, args)
+	args := []string{"--mount=/rootfs/proc/1/ns/mnt", "--", n.absHostPath("stat"), "-c%m", file}
+	glog.V(5).Infof("stat command: %v %v", nsenterPath, args)
 
 	exec := exec.New()
 	out, err := exec.Command(nsenterPath, args...).CombinedOutput()
 	if err != nil {
-		glog.Errorf("Failed to nsenter mount, return file doesn't exist: %v", err)
+		glog.Errorf("Failed to nsenter mount, return file(%s) doesn't exist: %v", file, err)
 		// If the command itself is correct, then if we encountered error
 		// then most likely this means that the directory does not exist.
 		return true, os.ErrNotExist
 	}
 	strOut := strings.TrimSuffix(string(out), "\n")
 
-	glog.V(5).Infof("IsLikelyNotMountPoint findmnt output: %v", strOut)
+	glog.V(5).Infof("IsLikelyNotMountPoint stat output: %v", strOut)
 	if strOut == file {
 		return false, nil
 	}
