@@ -9,6 +9,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update -y \
     util-linux \
     socat \
     curl \
+    ethtool \
     && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y \
     && DEBIAN_FRONTEND=noninteractive apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
