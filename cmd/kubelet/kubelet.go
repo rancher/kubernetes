@@ -34,6 +34,7 @@ import (
 	"github.com/spf13/pflag"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/cloudprovider"
+	cadvisor "k8s.io/kubernetes/pkg/kubelet/cadvisor/rancher"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
 
 	rancher "github.com/rancher/go-rancher/client"
@@ -104,6 +105,13 @@ func injectRancherCfg(s *app.KubeletServer) (*app.KubeletConfig, error) {
 
 	// for rancher monitoring
 	cfg.DockerDaemonContainer = ""
+
+	// reusing rancher's cadvisor
+	cfg.CAdvisorInterface, err = cadvisor.New("http://127.0.0.1:9344")
+	if err != nil {
+		glog.Error("Cannot connect to rancher's cadvisor")
+		cfg.CAdvisorInterface = nil
+	}
 
 	cfg.DockerClient, err = dockertools.NewRancherClient(cfg.DockerClient, rancherClient)
 	return cfg, err
