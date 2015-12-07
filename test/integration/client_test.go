@@ -44,7 +44,7 @@ func TestClient(t *testing.T) {
 
 	ns := api.NamespaceDefault
 	framework.DeleteAllEtcdKeys()
-	client := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
 
 	info, err := client.ServerVersion()
 	if err != nil {
@@ -109,12 +109,12 @@ func TestClient(t *testing.T) {
 }
 
 func TestSingleWatch(t *testing.T) {
-	_, s := runAMaster(t)
+	_, s := framework.RunAMaster(t)
 	defer s.Close()
 
 	ns := "blargh"
 	deleteAllEtcdKeys()
-	client := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
 
 	mkEvent := func(i int) *api.Event {
 		name := fmt.Sprintf("event-%v", i)
@@ -198,7 +198,7 @@ func TestMultiWatch(t *testing.T) {
 	defer s.Close()
 
 	ns := api.NamespaceDefault
-	client := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
 
 	dummyEvent := func(i int) *api.Event {
 		name := fmt.Sprintf("unrelated-%v", i)
@@ -247,7 +247,7 @@ func TestMultiWatch(t *testing.T) {
 			w, err := client.Pods(ns).Watch(
 				labels.Set{"watchlabel": name}.AsSelector(),
 				fields.Everything(),
-				rv,
+				api.ListOptions{ResourceVersion: rv},
 			)
 			if err != nil {
 				panic(fmt.Sprintf("watch error for %v: %v", name, err))

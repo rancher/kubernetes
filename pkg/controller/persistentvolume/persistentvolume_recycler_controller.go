@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package volumeclaimbinder
+package persistentvolume
 
 import (
 	"fmt"
@@ -66,11 +66,12 @@ func NewPersistentVolumeRecycler(kubeClient client.Interface, syncPeriod time.Du
 			ListFunc: func() (runtime.Object, error) {
 				return kubeClient.PersistentVolumes().List(labels.Everything(), fields.Everything())
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return kubeClient.PersistentVolumes().Watch(labels.Everything(), fields.Everything(), resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return kubeClient.PersistentVolumes().Watch(labels.Everything(), fields.Everything(), options)
 			},
 		},
 		&api.PersistentVolume{},
+		// TODO: Can we have much longer period here?
 		syncPeriod,
 		framework.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {

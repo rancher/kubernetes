@@ -23,10 +23,9 @@ import (
 	"net/http"
 	"os/exec"
 
-	"k8s.io/kubernetes/pkg/tools"
-
 	goetcd "github.com/coreos/go-etcd/etcd"
 	"github.com/golang/glog"
+	"k8s.io/kubernetes/pkg/tools"
 )
 
 // IsEtcdNotFound returns true if and only if err is an etcd not found error.
@@ -42,6 +41,16 @@ func IsEtcdNodeExist(err error) bool {
 // IsEtcdTestFailed returns true if and only if err is an etcd write conflict.
 func IsEtcdTestFailed(err error) bool {
 	return isEtcdErrorNum(err, tools.EtcdErrorCodeTestFailed)
+}
+
+// IsEtcdWatchExpired returns true if and only if err indicates the watch has expired.
+func IsEtcdWatchExpired(err error) bool {
+	return isEtcdErrorNum(err, tools.EtcdErrorCodeWatchExpired)
+}
+
+// IsEtcdUnreachable returns true if and only if err indicates the server could not be reached.
+func IsEtcdUnreachable(err error) bool {
+	return isEtcdErrorNum(err, tools.EtcdErrorCodeUnreachable)
 }
 
 // IsEtcdWatchStoppedByUser returns true if and only if err is a client triggered stop.

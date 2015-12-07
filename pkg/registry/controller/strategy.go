@@ -27,7 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 )
 
 // rcStrategy implements verification logic for Replication Controllers.
@@ -50,17 +50,14 @@ func (rcStrategy) PrepareForCreate(obj runtime.Object) {
 	controller.Status = api.ReplicationControllerStatus{}
 
 	controller.Generation = 1
-	controller.Status.ObservedGeneration = 0
 }
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
 func (rcStrategy) PrepareForUpdate(obj, old runtime.Object) {
-	// TODO: once RC has a status sub-resource we can enable this.
-	//newController := obj.(*api.ReplicationController)
-	//oldController := old.(*api.ReplicationController)
-	//newController.Status = oldController.Status
 	newController := obj.(*api.ReplicationController)
 	oldController := old.(*api.ReplicationController)
+	// update is not allowed to set status
+	newController.Status = oldController.Status
 
 	// Any changes to the spec increment the generation number, any changes to the
 	// status should reflect the generation number of the corresponding object. We push
@@ -79,9 +76,13 @@ func (rcStrategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
 // Validate validates a new replication controller.
-func (rcStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (rcStrategy) Validate(ctx api.Context, obj runtime.Object) utilvalidation.ErrorList {
 	controller := obj.(*api.ReplicationController)
 	return validation.ValidateReplicationController(controller)
+}
+
+// Canonicalize normalizes the object after validation.
+func (rcStrategy) Canonicalize(obj runtime.Object) {
 }
 
 // AllowCreateOnUpdate is false for replication controllers; this means a POST is
@@ -91,9 +92,9 @@ func (rcStrategy) AllowCreateOnUpdate() bool {
 }
 
 // ValidateUpdate is the default update validation for an end user.
-func (rcStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (rcStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
 	validationErrorList := validation.ValidateReplicationController(obj.(*api.ReplicationController))
-	updateErrorList := validation.ValidateReplicationControllerUpdate(old.(*api.ReplicationController), obj.(*api.ReplicationController))
+	updateErrorList := validation.ValidateReplicationControllerUpdate(obj.(*api.ReplicationController), old.(*api.ReplicationController))
 	return append(validationErrorList, updateErrorList...)
 }
 
@@ -101,12 +102,13 @@ func (rcStrategy) AllowUnconditionalUpdate() bool {
 	return true
 }
 
-// ControllerToSelectableFields returns a label set that represents the object.
+// ControllerToSelectableFields returns a field set that represents the object.
 func ControllerToSelectableFields(controller *api.ReplicationController) fields.Set {
-	return fields.Set{
-		"metadata.name":   controller.Name,
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(controller.ObjectMeta, true)
+	controllerSpecificFieldsSet := fields.Set{
 		"status.replicas": strconv.Itoa(controller.Status.Replicas),
 	}
+	return generic.MergeFieldsSets(objectMetaFieldsSet, controllerSpecificFieldsSet)
 }
 
 // MatchController is the filter used by the generic etcd backend to route
@@ -124,4 +126,21 @@ func MatchController(label labels.Selector, field fields.Selector) generic.Match
 			return labels.Set(rc.ObjectMeta.Labels), ControllerToSelectableFields(rc), nil
 		},
 	}
+}
+
+type rcStatusStrategy struct {
+	rcStrategy
+}
+
+var StatusStrategy = rcStatusStrategy{Strategy}
+
+func (rcStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newRc := obj.(*api.ReplicationController)
+	oldRc := old.(*api.ReplicationController)
+	// update is not allowed to set spec
+	newRc.Spec = oldRc.Spec
+}
+
+func (rcStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
+	return validation.ValidateReplicationControllerStatusUpdate(obj.(*api.ReplicationController), old.(*api.ReplicationController))
 }

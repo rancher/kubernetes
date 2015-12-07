@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/node.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/node.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -211,7 +211,7 @@ preparatory step before a node reboot, etc.  For example, to mark a node
 unschedulable, run this command:
 
 ```sh
-kubectl replace nodes 10.1.2.3 --patch='{"apiVersion": "v1", "unschedulable": true}'
+kubectl patch nodes $NODENAME -p '{"spec": {"unschedulable": true}}'
 ```
 
 Note that pods which are created by a daemonSet controller bypass the Kubernetes scheduler,
@@ -257,7 +257,7 @@ on each kubelet where you want to reserve resources.
 
 Node is a top-level resource in the kubernetes REST API. More details about the
 API object can be found at: [Node API
-object](https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/HEAD/docs/api-reference/definitions.html#_v1_node).
+object](https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/blob/HEAD/docs/api-reference/v1/definitions.html#_v1_node).
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

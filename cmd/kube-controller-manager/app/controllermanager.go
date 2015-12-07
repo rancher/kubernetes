@@ -25,37 +25,40 @@ package app
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"strconv"
 	"time"
 
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
-	"k8s.io/kubernetes/pkg/controller/endpoint"
+	endpointcontroller "k8s.io/kubernetes/pkg/controller/endpoint"
 	"k8s.io/kubernetes/pkg/controller/gc"
 	"k8s.io/kubernetes/pkg/controller/job"
-	"k8s.io/kubernetes/pkg/controller/namespace"
-	"k8s.io/kubernetes/pkg/controller/node"
-	"k8s.io/kubernetes/pkg/controller/persistentvolume"
+	namespacecontroller "k8s.io/kubernetes/pkg/controller/namespace"
+	nodecontroller "k8s.io/kubernetes/pkg/controller/node"
+	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/persistentvolume"
 	"k8s.io/kubernetes/pkg/controller/podautoscaler"
 	"k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
-	replicationControllerPkg "k8s.io/kubernetes/pkg/controller/replication"
-	"k8s.io/kubernetes/pkg/controller/resourcequota"
-	"k8s.io/kubernetes/pkg/controller/route"
-	"k8s.io/kubernetes/pkg/controller/service"
+	replicationcontroller "k8s.io/kubernetes/pkg/controller/replication"
+	resourcequotacontroller "k8s.io/kubernetes/pkg/controller/resourcequota"
+	routecontroller "k8s.io/kubernetes/pkg/controller/route"
+	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 	"k8s.io/kubernetes/pkg/controller/serviceaccount"
 	"k8s.io/kubernetes/pkg/healthz"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
@@ -78,6 +81,7 @@ type CMServer struct {
 	TerminatedPodGCThreshold          int
 	HorizontalPodAutoscalerSyncPeriod time.Duration
 	DeploymentControllerSyncPeriod    time.Duration
+	MinResyncPeriod                   time.Duration
 	RegisterRetryCount                int
 	NodeMonitorGracePeriod            time.Duration
 	NodeStartupGracePeriod            time.Duration
@@ -89,15 +93,15 @@ type CMServer struct {
 	ServiceAccountKeyFile             string
 	RootCAFile                        string
 
-	ClusterName                   string
-	ClusterCIDR                   net.IPNet
-	AllocateNodeCIDRs             bool
-	EnableProfiling               bool
-	EnableHorizontalPodAutoscaler bool
-	EnableDeploymentController    bool
+	ClusterName       string
+	ClusterCIDR       net.IPNet
+	AllocateNodeCIDRs bool
+	EnableProfiling   bool
 
-	Master     string
-	Kubeconfig string
+	Master       string
+	Kubeconfig   string
+	KubeAPIQPS   float32
+	KubeAPIBurst int
 }
 
 // NewCMServer creates a new CMServer with a default config.
@@ -113,14 +117,17 @@ func NewCMServer() *CMServer {
 		NodeSyncPeriod:                    10 * time.Second,
 		ResourceQuotaSyncPeriod:           10 * time.Second,
 		NamespaceSyncPeriod:               5 * time.Minute,
-		PVClaimBinderSyncPeriod:           10 * time.Second,
+		PVClaimBinderSyncPeriod:           10 * time.Minute,
 		HorizontalPodAutoscalerSyncPeriod: 30 * time.Second,
 		DeploymentControllerSyncPeriod:    30 * time.Second,
+		MinResyncPeriod:                   12 * time.Hour,
 		RegisterRetryCount:                10,
 		PodEvictionTimeout:                5 * time.Minute,
+		NodeMonitorGracePeriod:            40 * time.Second,
+		NodeStartupGracePeriod:            60 * time.Second,
+		NodeMonitorPeriod:                 5 * time.Second,
 		ClusterName:                       "kubernetes",
-		EnableHorizontalPodAutoscaler:     false,
-		EnableDeploymentController:        false,
+		TerminatedPodGCThreshold:          12500,
 		VolumeConfigFlags: VolumeConfigFlags{
 			// default values here
 			PersistentVolumeRecyclerMinimumTimeoutNFS:        300,
@@ -128,8 +135,31 @@ func NewCMServer() *CMServer {
 			PersistentVolumeRecyclerMinimumTimeoutHostPath:   60,
 			PersistentVolumeRecyclerIncrementTimeoutHostPath: 30,
 		},
+		KubeAPIQPS:   20.0,
+		KubeAPIBurst: 30,
 	}
 	return &s
+}
+
+// NewControllerManagerCommand creates a *cobra.Command object with default parameters
+func NewControllerManagerCommand() *cobra.Command {
+	s := NewCMServer()
+	s.AddFlags(pflag.CommandLine)
+	cmd := &cobra.Command{
+		Use: "kube-controller-manager",
+		Long: `The Kubernetes controller manager is a daemon that embeds
+the core control loops shipped with Kubernetes. In applications of robotics and
+automation, a control loop is a non-terminating loop that regulates the state of
+the system. In Kubernetes, a controller is a control loop that watches the shared
+state of the cluster through the apiserver and makes changes attempting to move the
+current state towards the desired state. Examples of controllers that ship with
+Kubernetes today are the replication controller, endpoints controller, namespace
+controller, and serviceaccounts controller.`,
+		Run: func(cmd *cobra.Command, args []string) {
+		},
+	}
+
+	return cmd
 }
 
 // VolumeConfigFlags is used to bind CLI flags to variables.  This top-level struct contains *all* enumerated
@@ -160,6 +190,7 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&s.ResourceQuotaSyncPeriod, "resource-quota-sync-period", s.ResourceQuotaSyncPeriod, "The period for syncing quota usage status in the system")
 	fs.DurationVar(&s.NamespaceSyncPeriod, "namespace-sync-period", s.NamespaceSyncPeriod, "The period for syncing namespace life-cycle updates")
 	fs.DurationVar(&s.PVClaimBinderSyncPeriod, "pvclaimbinder-sync-period", s.PVClaimBinderSyncPeriod, "The period for syncing persistent volumes and persistent volume claims")
+	fs.DurationVar(&s.MinResyncPeriod, "min-resync-period", s.MinResyncPeriod, "The resync period in reflectors will be random between MinResyncPeriod and 2*MinResyncPeriod")
 	fs.StringVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerPodTemplateFilePathNFS, "pv-recycler-pod-template-filepath-nfs", s.VolumeConfigFlags.PersistentVolumeRecyclerPodTemplateFilePathNFS, "The file path to a pod definition used as a template for NFS persistent volume recycling")
 	fs.IntVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerMinimumTimeoutNFS, "pv-recycler-minimum-timeout-nfs", s.VolumeConfigFlags.PersistentVolumeRecyclerMinimumTimeoutNFS, "The minimum ActiveDeadlineSeconds to use for an NFS Recycler pod")
 	fs.IntVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerIncrementTimeoutNFS, "pv-recycler-increment-timeout-nfs", s.VolumeConfigFlags.PersistentVolumeRecyclerIncrementTimeoutNFS, "the increment of time added per Gi to ActiveDeadlineSeconds for an NFS scrubber pod")
@@ -175,13 +206,13 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.RegisterRetryCount, "register-retry-count", s.RegisterRetryCount, ""+
 		"The number of retries for initial node registration.  Retry interval equals node-sync-period.")
 	fs.MarkDeprecated("register-retry-count", "This flag is currently no-op and will be deleted.")
-	fs.DurationVar(&s.NodeMonitorGracePeriod, "node-monitor-grace-period", 40*time.Second,
+	fs.DurationVar(&s.NodeMonitorGracePeriod, "node-monitor-grace-period", s.NodeMonitorGracePeriod,
 		"Amount of time which we allow running Node to be unresponsive before marking it unhealty. "+
 			"Must be N times more than kubelet's nodeStatusUpdateFrequency, "+
 			"where N means number of retries allowed for kubelet to post node status.")
-	fs.DurationVar(&s.NodeStartupGracePeriod, "node-startup-grace-period", 60*time.Second,
+	fs.DurationVar(&s.NodeStartupGracePeriod, "node-startup-grace-period", s.NodeStartupGracePeriod,
 		"Amount of time which we allow starting Node to be unresponsive before marking it unhealty.")
-	fs.DurationVar(&s.NodeMonitorPeriod, "node-monitor-period", 5*time.Second,
+	fs.DurationVar(&s.NodeMonitorPeriod, "node-monitor-period", s.NodeMonitorPeriod,
 		"The period for syncing NodeStatus in NodeController.")
 	fs.StringVar(&s.ServiceAccountKeyFile, "service-account-private-key-file", s.ServiceAccountKeyFile, "Filename containing a PEM-encoded private RSA key used to sign service account tokens.")
 	fs.BoolVar(&s.EnableProfiling, "profiling", true, "Enable profiling via web interface host:port/debug/pprof/")
@@ -191,27 +222,25 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.Master, "master", s.Master, "The address of the Kubernetes API server (overrides any value in kubeconfig)")
 	fs.StringVar(&s.Kubeconfig, "kubeconfig", s.Kubeconfig, "Path to kubeconfig file with authorization and master location information.")
 	fs.StringVar(&s.RootCAFile, "root-ca-file", s.RootCAFile, "If set, this root certificate authority will be included in service account's token secret. This must be a valid PEM-encoded CA bundle.")
-	fs.BoolVar(&s.EnableHorizontalPodAutoscaler, "enable-horizontal-pod-autoscaler", s.EnableHorizontalPodAutoscaler, "Enables horizontal pod autoscaler (requires enabling experimental API on apiserver). NOT IMPLEMENTED YET!")
-	fs.BoolVar(&s.EnableDeploymentController, "enable-deployment-controller", s.EnableDeploymentController, "Enables deployment controller (requires enabling experimental API on apiserver). NOT IMPLEMENTED YET!")
+	fs.Float32Var(&s.KubeAPIQPS, "kube-api-qps", s.KubeAPIQPS, "QPS to use while talking with kubernetes apiserver")
+	fs.IntVar(&s.KubeAPIBurst, "kube-api-burst", s.KubeAPIBurst, "Burst to use while talking with kubernetes apiserver")
+}
+
+func (s *CMServer) ResyncPeriod() time.Duration {
+	factor := rand.Float64() + 1
+	return time.Duration(float64(s.MinResyncPeriod.Nanoseconds()) * factor)
 }
 
 // Run runs the CMServer.  This should never exit.
 func (s *CMServer) Run(_ []string) error {
-	if s.Kubeconfig == "" && s.Master == "" {
-		glog.Warningf("Neither --kubeconfig nor --master was specified.  Using default API client.  This might not work.")
-	}
-
-	// This creates a client, first loading any specified kubeconfig
-	// file, and then overriding the Master flag, if non-empty.
-	kubeconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: s.Kubeconfig},
-		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: s.Master}}).ClientConfig()
+	kubeconfig, err := clientcmd.BuildConfigFromFlags(s.Master, s.Kubeconfig)
 	if err != nil {
 		return err
 	}
 
-	kubeconfig.QPS = 20.0
-	kubeconfig.Burst = 30
+	// Override kubeconfig qps/burst settings from flags
+	kubeconfig.QPS = s.KubeAPIQPS
+	kubeconfig.Burst = s.KubeAPIBurst
 
 	kubeClient, err := client.New(kubeconfig)
 	if err != nil {
@@ -235,20 +264,14 @@ func (s *CMServer) Run(_ []string) error {
 		glog.Fatal(server.ListenAndServe())
 	}()
 
-	endpoints := endpointcontroller.NewEndpointController(kubeClient)
-	go endpoints.Run(s.ConcurrentEndpointSyncs, util.NeverStop)
+	go endpointcontroller.NewEndpointController(kubeClient, s.ResyncPeriod).
+		Run(s.ConcurrentEndpointSyncs, util.NeverStop)
 
-	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient, replicationControllerPkg.BurstReplicas)
-	go controllerManager.Run(s.ConcurrentRCSyncs, util.NeverStop)
-
-	go daemon.NewDaemonSetsController(kubeClient).
-		Run(s.ConcurrentDSCSyncs, util.NeverStop)
-
-	go job.NewJobController(kubeClient).
-		Run(s.ConcurrentJobSyncs, util.NeverStop)
+	go replicationcontroller.NewReplicationManager(kubeClient, s.ResyncPeriod, replicationcontroller.BurstReplicas).
+		Run(s.ConcurrentRCSyncs, util.NeverStop)
 
 	if s.TerminatedPodGCThreshold > 0 {
-		go gc.New(kubeClient, s.TerminatedPodGCThreshold).
+		go gc.New(kubeClient, s.ResyncPeriod, s.TerminatedPodGCThreshold).
 			Run(util.NeverStop)
 	}
 
@@ -279,27 +302,65 @@ func (s *CMServer) Run(_ []string) error {
 		}
 	}
 
-	resourceQuotaController := resourcequotacontroller.NewResourceQuotaController(kubeClient)
-	resourceQuotaController.Run(s.ResourceQuotaSyncPeriod)
+	resourcequotacontroller.NewResourceQuotaController(kubeClient).Run(s.ResourceQuotaSyncPeriod)
 
-	// An OR of all flags to enable/disable experimental features
-	experimentalMode := s.EnableHorizontalPodAutoscaler || s.EnableDeploymentController
-	namespaceController := namespacecontroller.NewNamespaceController(kubeClient, experimentalMode, s.NamespaceSyncPeriod)
-	namespaceController.Run()
-
-	if s.EnableHorizontalPodAutoscaler {
-		horizontalPodAutoscalerController := podautoscaler.NewHorizontalController(kubeClient, metrics.NewHeapsterMetricsClient(kubeClient))
-		horizontalPodAutoscalerController.Run(s.HorizontalPodAutoscalerSyncPeriod)
+	// If apiserver is not running we should wait for some time and fail only then. This is particularly
+	// important when we start apiserver and controller manager at the same time.
+	var versionStrings []string
+	err = wait.PollImmediate(time.Second, 10*time.Second, func() (bool, error) {
+		if versionStrings, err = client.ServerAPIVersions(kubeconfig); err == nil {
+			return true, nil
+		}
+		glog.Errorf("Failed to get api versions from server: %v", err)
+		return false, nil
+	})
+	if err != nil {
+		glog.Fatalf("Failed to get api versions from server: %v", err)
 	}
-	if s.EnableDeploymentController {
-		deploymentController := deployment.New(kubeClient)
-		deploymentController.Run(s.DeploymentControllerSyncPeriod)
+	versions := &unversioned.APIVersions{Versions: versionStrings}
+
+	resourceMap, err := kubeClient.Discovery().ServerResources()
+	if err != nil {
+		glog.Fatalf("Failed to get supported resources from server: %v", err)
 	}
 
-	pvclaimBinder := volumeclaimbinder.NewPersistentVolumeClaimBinder(kubeClient, s.PVClaimBinderSyncPeriod)
+	namespacecontroller.NewNamespaceController(kubeClient, versions, s.NamespaceSyncPeriod).Run()
+
+	groupVersion := "extensions/v1beta1"
+	resources, found := resourceMap[groupVersion]
+	// TODO: this needs to be dynamic so users don't have to restart their controller manager if they change the apiserver
+	if containsVersion(versions, groupVersion) && found {
+		glog.Infof("Starting %s apis", groupVersion)
+		if containsResource(resources, "horizontalpodautoscalers") {
+			glog.Infof("Starting horizontal pod controller.")
+			metricsClient := metrics.NewHeapsterMetricsClient(kubeClient, metrics.DefaultHeapsterNamespace, metrics.DefaultHeapsterScheme, metrics.DefaultHeapsterService, metrics.DefaultHeapsterPort)
+			podautoscaler.NewHorizontalController(kubeClient, metricsClient).
+				Run(s.HorizontalPodAutoscalerSyncPeriod)
+		}
+
+		if containsResource(resources, "daemonsets") {
+			glog.Infof("Starting daemon set controller")
+			go daemon.NewDaemonSetsController(kubeClient, s.ResyncPeriod).
+				Run(s.ConcurrentDSCSyncs, util.NeverStop)
+		}
+
+		if containsResource(resources, "jobs") {
+			glog.Infof("Starting job controller")
+			go job.NewJobController(kubeClient, s.ResyncPeriod).
+				Run(s.ConcurrentJobSyncs, util.NeverStop)
+		}
+
+		if containsResource(resources, "deployments") {
+			glog.Infof("Starting deployment controller")
+			deployment.New(kubeClient).
+				Run(s.DeploymentControllerSyncPeriod)
+		}
+	}
+
+	pvclaimBinder := persistentvolumecontroller.NewPersistentVolumeClaimBinder(kubeClient, s.PVClaimBinderSyncPeriod)
 	pvclaimBinder.Run()
 
-	pvRecycler, err := volumeclaimbinder.NewPersistentVolumeRecycler(kubeClient, s.PVClaimBinderSyncPeriod, ProbeRecyclableVolumePlugins(s.VolumeConfigFlags))
+	pvRecycler, err := persistentvolumecontroller.NewPersistentVolumeRecycler(kubeClient, s.PVClaimBinderSyncPeriod, ProbeRecyclableVolumePlugins(s.VolumeConfigFlags))
 	if err != nil {
 		glog.Fatalf("Failed to start persistent volume recycler: %+v", err)
 	}
@@ -340,4 +401,23 @@ func (s *CMServer) Run(_ []string) error {
 	).Run()
 
 	select {}
+}
+
+func containsVersion(versions *unversioned.APIVersions, version string) bool {
+	for ix := range versions.Versions {
+		if versions.Versions[ix] == version {
+			return true
+		}
+	}
+	return false
+}
+
+func containsResource(resources *unversioned.APIResourceList, resourceName string) bool {
+	for ix := range resources.APIResources {
+		resource := resources.APIResources[ix]
+		if resource.Name == resourceName {
+			return true
+		}
+	}
+	return false
 }

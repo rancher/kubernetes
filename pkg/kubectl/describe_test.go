@@ -27,7 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
 )
@@ -37,10 +37,6 @@ type describeClient struct {
 	Namespace string
 	Err       error
 	client.Interface
-}
-
-func init() {
-	api.ForTesting_ReferencesAllowBlankSelfLinks = true
 }
 
 func TestDescribePod(t *testing.T) {
@@ -89,6 +85,7 @@ func TestPodDescribeResultsSorted(t *testing.T) {
 				FirstTimestamp: unversioned.NewTime(time.Date(2014, time.January, 15, 0, 0, 0, 0, time.UTC)),
 				LastTimestamp:  unversioned.NewTime(time.Date(2014, time.January, 15, 0, 0, 0, 0, time.UTC)),
 				Count:          1,
+				Type:           api.EventTypeNormal,
 			},
 			{
 				Source:         api.EventSource{Component: "scheduler"},
@@ -96,6 +93,7 @@ func TestPodDescribeResultsSorted(t *testing.T) {
 				FirstTimestamp: unversioned.NewTime(time.Date(1987, time.June, 17, 0, 0, 0, 0, time.UTC)),
 				LastTimestamp:  unversioned.NewTime(time.Date(1987, time.June, 17, 0, 0, 0, 0, time.UTC)),
 				Count:          1,
+				Type:           api.EventTypeNormal,
 			},
 			{
 				Source:         api.EventSource{Component: "kubelet"},
@@ -103,6 +101,7 @@ func TestPodDescribeResultsSorted(t *testing.T) {
 				FirstTimestamp: unversioned.NewTime(time.Date(2002, time.December, 25, 0, 0, 0, 0, time.UTC)),
 				LastTimestamp:  unversioned.NewTime(time.Date(2002, time.December, 25, 0, 0, 0, 0, time.UTC)),
 				Count:          1,
+				Type:           api.EventTypeNormal,
 			},
 		},
 	})
@@ -206,7 +205,7 @@ func TestDescribeContainers(t *testing.T) {
 			},
 			expectedElements: []string{"test", "State", "Waiting", "Ready", "True", "Restart Count", "7", "Image", "image"},
 		},
-		//env
+		// Env
 		{
 			container: api.Container{Name: "test", Image: "image", Env: []api.EnvVar{{Name: "envname", Value: "xyz"}}},
 			status: api.ContainerStatus{
@@ -215,6 +214,26 @@ func TestDescribeContainers(t *testing.T) {
 				RestartCount: 7,
 			},
 			expectedElements: []string{"test", "State", "Waiting", "Ready", "True", "Restart Count", "7", "Image", "image", "envname", "xyz"},
+		},
+		// Command
+		{
+			container: api.Container{Name: "test", Image: "image", Command: []string{"sleep", "1000"}},
+			status: api.ContainerStatus{
+				Name:         "test",
+				Ready:        true,
+				RestartCount: 7,
+			},
+			expectedElements: []string{"test", "State", "Waiting", "Ready", "True", "Restart Count", "7", "Image", "image", "sleep", "1000"},
+		},
+		// Args
+		{
+			container: api.Container{Name: "test", Image: "image", Args: []string{"time", "1000"}},
+			status: api.ContainerStatus{
+				Name:         "test",
+				Ready:        true,
+				RestartCount: 7,
+			},
+			expectedElements: []string{"test", "State", "Waiting", "Ready", "True", "Restart Count", "7", "Image", "image", "time", "1000"},
 		},
 		// Using limits.
 		{
@@ -481,13 +500,13 @@ func TestPersistentVolumeDescriber(t *testing.T) {
 }
 
 func TestDescribeDeployment(t *testing.T) {
-	fake := testclient.NewSimpleFake(&experimental.Deployment{
+	fake := testclient.NewSimpleFake(&extensions.Deployment{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "bar",
 			Namespace: "foo",
 		},
-		Spec: experimental.DeploymentSpec{
-			Template: &api.PodTemplateSpec{},
+		Spec: extensions.DeploymentSpec{
+			Template: api.PodTemplateSpec{},
 		},
 	})
 	c := &describeClient{T: t, Namespace: "foo", Interface: fake}

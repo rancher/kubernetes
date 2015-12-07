@@ -94,8 +94,8 @@ func NewExists(c client.Interface) admission.Interface {
 			ListFunc: func() (runtime.Object, error) {
 				return c.Namespaces().List(labels.Everything(), fields.Everything())
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return c.Namespaces().Watch(labels.Everything(), fields.Everything(), resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return c.Namespaces().Watch(labels.Everything(), fields.Everything(), options)
 			},
 		},
 		&api.Namespace{},

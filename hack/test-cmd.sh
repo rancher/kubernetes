@@ -30,20 +30,35 @@ function stop-proxy()
 {
   [[ -n "${PROXY_PID-}" ]] && kill "${PROXY_PID}" 1>&2 2>/dev/null
   PROXY_PID=
+  PROXY_PORT=
 }
 
-# Starts "kubect proxy" to test the client proxy. You may pass options, e.g.
-# --api-prefix.
+# Starts "kubect proxy" to test the client proxy. $1: api_prefix
 function start-proxy()
 {
   stop-proxy
 
   kube::log::status "Starting kubectl proxy"
-  # the --www and --www-prefix are just to make something definitely show up for
-  # wait_for_url to see.
-  kubectl proxy -p ${PROXY_PORT} --www=. --www-prefix=/healthz "$@" 1>&2 &
+
+  for retry in $(seq 1 3); do
+    PROXY_PORT=$(kube::util::get_random_port)
+    kube::log::status "On try ${retry}, use proxy port ${PROXY_PORT} if it's free"
+    if kube::util::test_host_port_free "127.0.0.1" "${PROXY_PORT}"; then
+      if [ $# -eq 0 ]; then
+        kubectl proxy -p ${PROXY_PORT} --www=. 1>&2 & break
+      else
+        kubectl proxy -p ${PROXY_PORT} --www=. --api-prefix="$1" 1>&2 & break
+      fi
+    fi
+    sleep 1;
+  done
+
   PROXY_PID=$!
-  kube::util::wait_for_url "http://127.0.0.1:${PROXY_PORT}/healthz" "kubectl proxy $@"
+  if [ $# -eq 0 ]; then
+    kube::util::wait_for_url "http://127.0.0.1:${PROXY_PORT}/healthz" "kubectl proxy"
+  else
+    kube::util::wait_for_url "http://127.0.0.1:${PROXY_PORT}/$1/healthz" "kubectl proxy --api-prefix=$1"
+  fi
 }
 
 function cleanup()
@@ -74,6 +89,24 @@ function check-curl-proxy-code()
   echo "For address ${full_address}, got ${status} but wanted ${desired}"
   return 1
 }
+
+# TODO: Remove this function when we do the retry inside the kubectl commands. See #15333.
+function kubectl-with-retry()
+{
+  ERROR_FILE="${KUBE_TEMP}/kubectl-error"
+  for count in $(seq 0 3); do
+    kubectl "$@" 2> ${ERROR_FILE} || true
+    if grep -q "the object has been modified" "${ERROR_FILE}"; then
+      kube::log::status "retry $1, error: $(cat ${ERROR_FILE})"
+      rm "${ERROR_FILE}"
+      sleep $((2**count))
+    else
+      rm "${ERROR_FILE}"
+      break
+    fi
+  done
+}
+
 kube::util::trap_add cleanup EXIT SIGINT
 
 kube::util::ensure-temp-dir
@@ -86,7 +119,6 @@ API_HOST=${API_HOST:-127.0.0.1}
 KUBELET_PORT=${KUBELET_PORT:-10250}
 KUBELET_HEALTHZ_PORT=${KUBELET_HEALTHZ_PORT:-10248}
 CTLRMGR_PORT=${CTLRMGR_PORT:-10252}
-PROXY_PORT=${PROXY_PORT:-8001}
 PROXY_HOST=127.0.0.1 # kubectl only serves on localhost.
 
 # ensure ~/.kube/config isn't loaded by tests
@@ -127,7 +159,7 @@ kube::util::wait_for_url "http://127.0.0.1:${KUBELET_HEALTHZ_PORT}/healthz" "kub
 
 # Start kube-apiserver
 kube::log::status "Starting kube-apiserver"
-KUBE_API_VERSIONS="v1,experimental/v1alpha1" "${KUBE_OUTPUT_HOSTBIN}/kube-apiserver" \
+KUBE_API_VERSIONS="v1,extensions/v1beta1" "${KUBE_OUTPUT_HOSTBIN}/kube-apiserver" \
   --address="127.0.0.1" \
   --public-address-override="127.0.0.1" \
   --port="${API_PORT}" \
@@ -136,6 +168,7 @@ KUBE_API_VERSIONS="v1,experimental/v1alpha1" "${KUBE_OUTPUT_HOSTBIN}/kube-apiser
   --kubelet-port=${KUBELET_PORT} \
   --runtime-config=api/v1 \
   --cert-dir="${TMPDIR:-/tmp/}" \
+  --runtime_config="extensions/v1beta1/deployments=true" \
   --service-cluster-ip-range="10.0.0.0/24" 1>&2 &
 APISERVER_PID=$!
 
@@ -180,7 +213,12 @@ runTests() {
   rc_container_image_field=".spec.template.spec.containers"
   port_field="(index .spec.ports 0).port"
   port_name="(index .spec.ports 0).name"
+  second_port_field="(index .spec.ports 1).port"
+  second_port_name="(index .spec.ports 1).name"
   image_field="(index .spec.containers 0).image"
+  hpa_min_field=".spec.minReplicas"
+  hpa_max_field=".spec.maxReplicas"
+  hpa_cpu_field=".spec.cpuUtilization.targetPercentage"
 
   # Passing no arguments to create is an error
   ! kubectl create
@@ -190,26 +228,24 @@ runTests() {
   #######################
 
   # Make sure the UI can be proxied
-  start-proxy --api-prefix=/
+  start-proxy
   check-curl-proxy-code /ui 301
   check-curl-proxy-code /metrics 200
-  if [[ -n "${version}" ]]; then
-    check-curl-proxy-code /api/${version}/namespaces 200
-  fi
-  stop-proxy
-
-  # Default proxy locks you into the /api path (legacy behavior)
-  start-proxy
-  check-curl-proxy-code /ui 404
-  check-curl-proxy-code /metrics 404
   check-curl-proxy-code /api/ui 404
   if [[ -n "${version}" ]]; then
     check-curl-proxy-code /api/${version}/namespaces 200
   fi
+  check-curl-proxy-code /static/ 200
+  stop-proxy
+
+  # Make sure the in-development api is accessible by default
+  start-proxy
+  check-curl-proxy-code /apis 200
+  check-curl-proxy-code /apis/extensions/ 200
   stop-proxy
 
   # Custom paths let you see everything.
-  start-proxy --api-prefix=/custom
+  start-proxy /custom
   check-curl-proxy-code /custom/ui 301
   check-curl-proxy-code /custom/metrics 200
   if [[ -n "${version}" ]]; then
@@ -349,7 +385,7 @@ runTests() {
   # Pre-condition: valid-pod and redis-proxy PODs are running
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'redis-proxy:valid-pod:'
   # Command
-  kubectl stop pods valid-pod redis-proxy "${kube_flags[@]}" --grace-period=0 # stop multiple pods at once
+  kubectl delete pods valid-pod redis-proxy "${kube_flags[@]}" --grace-period=0 # delete multiple pods at once
   # Post-condition: no POD is running
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -401,6 +437,39 @@ runTests() {
   # Post-condition: valid-pod POD has image kubernetes/pause
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'kubernetes/pause:'
 
+  ## If resourceVersion is specified in the patch, it will be treated as a precondition, i.e., if the resourceVersion is different from that is stored in the server, the Patch should be rejected
+  ERROR_FILE="${KUBE_TEMP}/conflict-error"
+  ## If the resourceVersion is the same as the one stored in the server, the patch will be applied.
+  # Command
+  # Needs to retry because other party may change the resource.
+  for count in $(seq 0 3); do
+    resourceVersion=$(kubectl get "${kube_flags[@]}" pod valid-pod -o go-template='{{ .metadata.resourceVersion }}')
+    kubectl patch "${kube_flags[@]}" pod valid-pod -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "nginx"}]},"metadata":{"resourceVersion":"'$resourceVersion'"}}' 2> "${ERROR_FILE}" || true
+    if grep -q "the object has been modified" "${ERROR_FILE}"; then
+      kube::log::status "retry $1, error: $(cat ${ERROR_FILE})"
+      rm "${ERROR_FILE}"
+      sleep $((2**count))
+    else
+      rm "${ERROR_FILE}"
+      kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'nginx:'
+      break
+    fi
+  done
+
+  ## If the resourceVersion is the different from the one stored in the server, the patch will be rejected.
+  resourceVersion=$(kubectl get "${kube_flags[@]}" pod valid-pod -o go-template='{{ .metadata.resourceVersion }}')
+  ((resourceVersion+=100))
+  # Command
+  kubectl patch "${kube_flags[@]}" pod valid-pod -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "nginx"}]},"metadata":{"resourceVersion":"'$resourceVersion'"}}' 2> "${ERROR_FILE}" || true
+  # Post-condition: should get an error reporting the conflict
+  if grep -q "please apply your changes to the latest version and try again" "${ERROR_FILE}"; then
+    kube::log::status "\"kubectl patch with resourceVersion $resourceVersion\" returns error as expected: $(cat ${ERROR_FILE})"
+  else
+    kube::log::status "\"kubectl patch with resourceVersion $resourceVersion\" returns unexpected error or non-error: $(cat ${ERROR_FILE})"
+    exit 1
+  fi
+  rm "${ERROR_FILE}"
+
   ## --force replace pod can change other field, e.g., spec.container.name
   # Command
   kubectl get "${kube_flags[@]}" pod valid-pod -o json | sed 's/"kubernetes-serve-hostname"/"replaced-k8s-serve-hostname"/g' > /tmp/tmp-valid-pod.json
@@ -411,13 +480,17 @@ runTests() {
   rm /tmp/tmp-valid-pod.json
 
   ## kubectl edit can update the image field of a POD. tmp-editor.sh is a fake editor
-  echo -e '#!/bin/bash\nsed -i "s/kubernetes\/pause/gcr.io\/google_containers\/serve_hostname/g" $1' > /tmp/tmp-editor.sh
+  echo -e '#!/bin/bash\nsed -i "s/nginx/gcr.io\/google_containers\/serve_hostname/g" $1' > /tmp/tmp-editor.sh
   chmod +x /tmp/tmp-editor.sh
   EDITOR=/tmp/tmp-editor.sh kubectl edit "${kube_flags[@]}" pods/valid-pod
   # Post-condition: valid-pod POD has image gcr.io/google_containers/serve_hostname
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'gcr.io/google_containers/serve_hostname:'
   # cleaning
   rm /tmp/tmp-editor.sh
+  [ "$(EDITOR=cat kubectl edit pod/valid-pod 2>&1 | grep 'Edit cancelled')" ]
+  [ "$(EDITOR=cat kubectl edit pod/valid-pod | grep 'name: valid-pod')" ]
+  [ "$(EDITOR=cat kubectl edit --windows-line-endings pod/valid-pod | file - | grep CRLF)" ]
+  [ ! "$(EDITOR=cat kubectl edit --windows-line-endings=false pod/valid-pod | file - | grep CRLF)" ]
 
   ### Overwriting an existing label is not permitted
   # Pre-condition: name is valid-pod
@@ -458,6 +531,139 @@ runTests() {
   kubectl delete -f docs/user-guide/multi-pod.yaml "${kube_flags[@]}"
   # Post-condition: no PODs are running
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+
+  ## kubectl apply should update configuration annotations only if apply is already called
+  ## 1. kubectl create doesn't set the annotation
+  # Pre-Condition: no POD is running
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: create a pod "test-pod"
+  kubectl create -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is running
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-label'
+  # Post-Condition: pod "test-pod" doesn't have configuration annotation
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  ## 2. kubectl replace doesn't set the annotation
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | sed 's/test-pod-label/test-pod-replaced/g' > "${KUBE_TEMP}"/test-pod-replace.yaml
+  # Command: replace the pod "test-pod"
+  kubectl replace -f "${KUBE_TEMP}"/test-pod-replace.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is replaced
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-replaced'
+  # Post-Condition: pod "test-pod" doesn't have configuration annotation
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  ## 3. kubectl apply does set the annotation
+  # Command: apply the pod "test-pod"
+  kubectl apply -f hack/testdata/pod-apply.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is applied
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-applied'
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration > "${KUBE_TEMP}"/annotation-configuration
+  ## 4. kubectl replace updates an existing annotation
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | sed 's/test-pod-applied/test-pod-replaced/g' > "${KUBE_TEMP}"/test-pod-replace.yaml
+  # Command: replace the pod "test-pod"
+  kubectl replace -f "${KUBE_TEMP}"/test-pod-replace.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is replaced
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-replaced'
+  # Post-Condition: pod "test-pod" has configuration annotation, and it's updated (different from the annotation when it's applied)
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration > "${KUBE_TEMP}"/annotation-configuration-replaced
+  ! [[ $(diff -q "${KUBE_TEMP}"/annotation-configuration "${KUBE_TEMP}"/annotation-configuration-replaced > /dev/null) ]]
+  # Clean up
+  rm "${KUBE_TEMP}"/test-pod-replace.yaml "${KUBE_TEMP}"/annotation-configuration "${KUBE_TEMP}"/annotation-configuration-replaced
+  kubectl delete pods test-pod "${kube_flags[@]}"
+
+  ## Configuration annotations should be set when --save-config is enabled
+  ## 1. kubectl create --save-config should generate configuration annotation
+  # Pre-Condition: no POD is running
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: create a pod "test-pod"
+  kubectl create -f hack/testdata/pod.yaml --save-config "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up
+  kubectl delete -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  ## 2. kubectl edit --save-config should generate configuration annotation
+  # Pre-Condition: no POD is running, then create pod "test-pod", which shouldn't have configuration annotation
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  kubectl create -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Command: edit the pod "test-pod"
+  temp_editor="${KUBE_TEMP}/tmp-editor.sh"
+  echo -e '#!/bin/bash\nsed -i "s/test-pod-label/test-pod-label-edited/g" $@' > "${temp_editor}"
+  chmod +x "${temp_editor}"
+  EDITOR=${temp_editor} kubectl edit pod test-pod --save-config "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up
+  kubectl delete -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  ## 3. kubectl replace --save-config should generate configuration annotation
+  # Pre-Condition: no POD is running, then create pod "test-pod", which shouldn't have configuration annotation
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  kubectl create -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Command: replace the pod "test-pod"
+  kubectl replace -f hack/testdata/pod.yaml --save-config "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up
+  kubectl delete -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  ## 4. kubectl run --save-config should generate configuration annotation
+  # Pre-Condition: no RC is running
+  kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: create the rc "nginx" with image nginx
+  kubectl run nginx --image=nginx --save-config --generator=run/v1 "${kube_flags[@]}"
+  # Post-Condition: rc "nginx" has configuration annotation
+  [[ "$(kubectl get rc nginx -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  ## 5. kubectl expose --save-config should generate configuration annotation
+  # Pre-Condition: no service is running
+  kube::test::get_object_assert svc "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:'
+  # Command: expose the rc "nginx"
+  kubectl expose rc nginx --save-config --port=80 --target-port=8000 "${kube_flags[@]}"
+  # Post-Condition: service "nginx" has configuration annotation
+  [[ "$(kubectl get svc nginx -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up
+  kubectl delete rc,svc nginx 
+  ## 6. kubectl autoscale --save-config should generate configuration annotation
+  # Pre-Condition: no RC is running, then create the rc "frontend", which shouldn't have configuration annotation
+  kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
+  kubectl create -f examples/guestbook/frontend-controller.yaml "${kube_flags[@]}"
+  ! [[ "$(kubectl get rc frontend -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Command: autoscale rc "frontend" 
+  kubectl autoscale -f examples/guestbook/frontend-controller.yaml --save-config "${kube_flags[@]}" --max=2
+  # Post-Condition: hpa "frontend" has configuration annotation
+  [[ "$(kubectl get hpa frontend -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up
+  kubectl delete rc,hpa frontend
+
+  ## kubectl apply should create the resource that doesn't exist yet
+  # Pre-Condition: no POD is running 
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: apply a pod "test-pod" (doesn't exist) should create this pod 
+  kubectl apply -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is running
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-label'
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  # Clean up 
+  kubectl delete pods test-pod "${kube_flags[@]}"
+
+  ## kubectl run should create deployments or jobs 
+  # Pre-Condition: no Job is running 
+  kube::test::get_object_assert jobs "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command
+  kubectl run pi --image=perl --restart=OnFailure -- perl -Mbignum=bpi -wle 'print bpi(20)'
+  # Post-Condition: Job "pi" is created 
+  kube::test::get_object_assert jobs "{{range.items}}{{$id_field}}:{{end}}" 'pi:'
+  # Clean up
+  kubectl delete jobs pi
+  # Pre-Condition: no Deployment is running 
+  kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command
+  kubectl run nginx --image=nginx --generator=deployment/v1beta1
+  # Post-Condition: Deployment "nginx" is created 
+  kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" 'nginx:'
+  # Clean up 
+  kubectl delete deployment nginx
 
   ##############
   # Namespaces #
@@ -608,7 +814,7 @@ __EOF__
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
   kubectl create -f examples/guestbook/frontend-controller.yaml "${kube_flags[@]}"
-  kubectl stop rc frontend "${kube_flags[@]}"
+  kubectl delete rc frontend "${kube_flags[@]}"
   # Post-condition: no pods from frontend controller
   kube::test::get_object_assert 'pods -l "name=frontend"' "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -660,7 +866,7 @@ __EOF__
   kubectl create -f examples/guestbook/redis-master-controller.yaml "${kube_flags[@]}"
   kubectl create -f examples/guestbook/redis-slave-controller.yaml "${kube_flags[@]}"
   # Command
-  kubectl scale rc/redis-master rc/redis-slave --replicas=4
+  kubectl scale rc/redis-master rc/redis-slave --replicas=4 "${kube_flags[@]}"
   # Post-condition: 4 replicas each
   kube::test::get_object_assert 'rc redis-master' "{{$rc_replicas_field}}" '4'
   kube::test::get_object_assert 'rc redis-slave' "{{$rc_replicas_field}}" '4'
@@ -699,8 +905,8 @@ __EOF__
   # Pre-condition: don't need
   # Command
   output_message=$(! kubectl expose nodes 127.0.0.1 2>&1 "${kube_flags[@]}")
-  # Post-condition: the error message has "invalid resource" string
-  kube::test::if_has_string "${output_message}" 'invalid resource'
+  # Post-condition: the error message has "cannot expose" string
+  kube::test::if_has_string "${output_message}" 'cannot expose'
 
   ### Try to generate a service with invalid name (exceeding maximum valid size)
   # Pre-condition: use --name flag
@@ -714,11 +920,22 @@ __EOF__
   # Clean-up
   kubectl delete svc kubernetes-serve-hostnam "${kube_flags[@]}"
 
+  ### Expose multiport object as a new service
+  # Pre-condition: don't use --port flag
+  output_message=$(kubectl expose -f docs/admin/high-availability/etcd.yaml --selector=test=etcd 2>&1 "${kube_flags[@]}")
+  # Post-condition: expose succeeded
+  kube::test::if_has_string "${output_message}" '\"etcd-server\" exposed'
+  # Post-condition: generated service has both ports from the exposed pod
+  kube::test::get_object_assert 'service etcd-server' "{{$port_name}} {{$port_field}}" 'port-1 2380'
+  kube::test::get_object_assert 'service etcd-server' "{{$second_port_name}} {{$second_port_field}}" 'port-2 4001'
+  # Clean-up
+  kubectl delete svc etcd-server "${kube_flags[@]}"
+
   ### Delete replication controller with id
   # Pre-condition: frontend replication controller is running
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'frontend:'
   # Command
-  kubectl stop rc frontend "${kube_flags[@]}"
+  kubectl delete rc frontend "${kube_flags[@]}"
   # Post-condition: no replication controller is running
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -735,20 +952,53 @@ __EOF__
   # Pre-condition: frontend and redis-slave
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'frontend:redis-slave:'
   # Command
-  kubectl stop rc frontend redis-slave "${kube_flags[@]}" # delete multiple controllers at once
+  kubectl delete rc frontend redis-slave "${kube_flags[@]}" # delete multiple controllers at once
   # Post-condition: no replication controller is running
   kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
+
+  ### Auto scale replication controller
+  # Pre-condition: no replication controller is running
+  kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command
+  kubectl create -f examples/guestbook/frontend-controller.yaml "${kube_flags[@]}"
+  kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'frontend:'
+  # autoscale 1~2 pods, CPU utilization 70%, rc specified by file
+  kubectl autoscale -f examples/guestbook/frontend-controller.yaml "${kube_flags[@]}" --max=2 --cpu-percent=70
+  kube::test::get_object_assert 'hpa frontend' "{{$hpa_min_field}} {{$hpa_max_field}} {{$hpa_cpu_field}}" '1 2 70'
+  kubectl delete hpa frontend "${kube_flags[@]}"
+  # autoscale 2~3 pods, default CPU utilization (80%), rc specified by name
+  kubectl autoscale rc frontend "${kube_flags[@]}" --min=2 --max=3
+  kube::test::get_object_assert 'hpa frontend' "{{$hpa_min_field}} {{$hpa_max_field}} {{$hpa_cpu_field}}" '2 3 80'
+  kubectl delete hpa frontend "${kube_flags[@]}"
+  # autoscale without specifying --max should fail
+  ! kubectl autoscale rc frontend "${kube_flags[@]}"
+  # Clean up
+  kubectl delete rc frontend "${kube_flags[@]}"
+
+  ### Auto scale deployment 
+  # Pre-condition: no deployment is running
+  kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command
+  kubectl create -f examples/extensions/deployment.yaml "${kube_flags[@]}"
+  kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" 'nginx-deployment:'
+  # autoscale 2~3 pods, default CPU utilization (80%)
+  kubectl autoscale deployment nginx-deployment "${kube_flags[@]}" --min=2 --max=3
+  kube::test::get_object_assert 'hpa nginx-deployment' "{{$hpa_min_field}} {{$hpa_max_field}} {{$hpa_cpu_field}}" '2 3 80'
+  # Clean up
+  kubectl delete hpa nginx-deployment "${kube_flags[@]}"
+  kubectl delete deployment nginx-deployment "${kube_flags[@]}"
 
   ######################
   # Multiple Resources #
   ######################
 
   kube::log::status "Testing kubectl(${version}:multiple resources)"
-  # TODO: add test for types like ReplicationControllerList, ServiceList
 
   FILES="hack/testdata/multi-resource-yaml
   hack/testdata/multi-resource-list
-  hack/testdata/multi-resource-json"
+  hack/testdata/multi-resource-json
+  hack/testdata/multi-resource-rclist
+  hack/testdata/multi-resource-svclist"
   YAML=".yaml"
   JSON=".json"
   for file in $FILES; do
@@ -761,41 +1011,127 @@ __EOF__
       replace_file="${file%.json}-modify.json"
     fi
 
-    ### Create, get, describe, replace, label, annotate, and then delete service nginxsvc and replication controller my-nginx from 3 types of files:
+    has_svc=true
+    has_rc=true
+    two_rcs=false
+    two_svcs=false
+    if [[ "${file}" == *rclist* ]]; then
+      has_svc=false
+      two_rcs=true
+    fi
+    if [[ "${file}" == *svclist* ]]; then
+      has_rc=false
+      two_svcs=true
+    fi
+
+    ### Create, get, describe, replace, label, annotate, and then delete service nginxsvc and replication controller my-nginx from 5 types of files:
     ### 1) YAML, separated by ---; 2) JSON, with a List type; 3) JSON, with JSON object concatenation
+    ### 4) JSON, with a ReplicationControllerList type; 5) JSON, with a ServiceList type
+    echo "Testing with file ${file} and replace with file ${replace_file}"
     # Pre-condition: no service (other than default kubernetes services) or replication controller is running
     kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:'
     kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" ''
     # Command
-    # TODO: remove --validate=false when PR "Add validate support for list kind #14726" is merged
-    kubectl create -f $file --validate=false "${kube_flags[@]}"
-    # Post-condition: mock service is running
-    kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:mock:'
-    # Post-condition: mock rc is running
-    kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'mock:'
+    kubectl create -f "${file}" "${kube_flags[@]}"
+    # Post-condition: mock service (and mock2) is running
+    if [ "$has_svc" = true ]; then
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:mock:mock2:'
+      else
+        kube::test::get_object_assert services "{{range.items}}{{$id_field}}:{{end}}" 'kubernetes:mock:'
+      fi
+    fi
+    # Post-condition: mock rc (and mock2) is running
+    if [ "$has_rc" = true ]; then
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'mock:mock2:'
+      else
+        kube::test::get_object_assert rc "{{range.items}}{{$id_field}}:{{end}}" 'mock:'
+      fi
+    fi
     # Command
-    # kubectl create -f $file "${kube_flags[@]}" # test fails here now
-    # TODO: test get when PR "Fix get with List #14888" is merged
-    # kubectl get -f $file "${kube_flags[@]}"
-    kubectl describe -f $file "${kube_flags[@]}"
+    kubectl get -f "${file}" "${kube_flags[@]}"
+    # Command: watching multiple resources should return "not supported" error
+    WATCH_ERROR_FILE="${KUBE_TEMP}/kubectl-watch-error"
+    kubectl get -f "${file}" "${kube_flags[@]}" "--watch" 2> ${WATCH_ERROR_FILE} || true
+    if ! grep -q "watch is only supported on individual resources and resource collections" "${WATCH_ERROR_FILE}"; then
+      kube::log::error_exit "kubectl watch multiple resource returns unexpected error or non-error: $(cat ${WATCH_ERROR_FILE})" "1"
+    fi
+    kubectl describe -f "${file}" "${kube_flags[@]}"
     # Command
-    # TODO: remove --validate=false when PR "Add validate support for list kind #14726" is merged
-    kubectl replace -f $replace_file --force --validate=false "${kube_flags[@]}"
-    # Post-condition: mock service and mock rc are replaced
-    kube::test::get_object_assert 'services mock' "{{${labels_field}.status}}" 'replaced'
-    kube::test::get_object_assert 'rc mock' "{{${labels_field}.status}}" 'replaced'
+    kubectl replace -f $replace_file --force "${kube_flags[@]}"
+    # Post-condition: mock service (and mock2) and mock rc (and mock2) are replaced
+    if [ "$has_svc" = true ]; then
+      kube::test::get_object_assert 'services mock' "{{${labels_field}.status}}" 'replaced'
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert 'services mock2' "{{${labels_field}.status}}" 'replaced'
+      fi
+    fi
+    if [ "$has_rc" = true ]; then
+      kube::test::get_object_assert 'rc mock' "{{${labels_field}.status}}" 'replaced'
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert 'rc mock2' "{{${labels_field}.status}}" 'replaced'
+      fi
+    fi
+    # Command: kubectl edit multiple resources
+    temp_editor="${KUBE_TEMP}/tmp-editor.sh"
+    echo -e '#!/bin/bash\nsed -i "s/status\:\ replaced/status\:\ edited/g" $@' > "${temp_editor}"
+    chmod +x "${temp_editor}"
+    EDITOR="${temp_editor}" kubectl edit "${kube_flags[@]}" -f "${file}"
+    # Post-condition: mock service (and mock2) and mock rc (and mock2) are edited
+    if [ "$has_svc" = true ]; then
+      kube::test::get_object_assert 'services mock' "{{${labels_field}.status}}" 'edited'
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert 'services mock2' "{{${labels_field}.status}}" 'edited'
+      fi
+    fi
+    if [ "$has_rc" = true ]; then
+      kube::test::get_object_assert 'rc mock' "{{${labels_field}.status}}" 'edited'
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert 'rc mock2' "{{${labels_field}.status}}" 'edited'
+      fi
+    fi
+    # cleaning
+    rm "${temp_editor}"
     # Command
-    kubectl label -f $file labeled=true "${kube_flags[@]}"
-    # Post-condition: mock service and mock rc are labeled
-    kube::test::get_object_assert 'services mock' "{{${labels_field}.labeled}}" 'true'
-    kube::test::get_object_assert 'rc mock' "{{${labels_field}.labeled}}" 'true'
+    # We need to set --overwrite, because otherwise, if the first attempt to run "kubectl label" 
+    # fails on some, but not all, of the resources, retries will fail because it tries to modify
+    # existing labels.
+    kubectl-with-retry label -f $file labeled=true --overwrite "${kube_flags[@]}"
+    # Post-condition: mock service and mock rc (and mock2) are labeled
+    if [ "$has_svc" = true ]; then
+      kube::test::get_object_assert 'services mock' "{{${labels_field}.labeled}}" 'true'
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert 'services mock2' "{{${labels_field}.labeled}}" 'true'
+      fi
+    fi
+    if [ "$has_rc" = true ]; then
+      kube::test::get_object_assert 'rc mock' "{{${labels_field}.labeled}}" 'true'
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert 'rc mock2' "{{${labels_field}.labeled}}" 'true'
+      fi
+    fi
     # Command
-    kubectl annotate -f $file annotated=true "${kube_flags[@]}"
-    # Post-condition: mock service and mock rc are annotated
-    kube::test::get_object_assert 'services mock' "{{${annotations_field}.annotated}}" 'true'
-    kube::test::get_object_assert 'rc mock' "{{${annotations_field}.annotated}}" 'true'
-    # Cleanup services and rc
-    kubectl delete -f $file "${kube_flags[@]}"
+    # Command
+    # We need to set --overwrite, because otherwise, if the first attempt to run "kubectl annotate" 
+    # fails on some, but not all, of the resources, retries will fail because it tries to modify
+    # existing annotations.
+    kubectl-with-retry annotate -f $file annotated=true --overwrite "${kube_flags[@]}"
+    # Post-condition: mock service (and mock2) and mock rc (and mock2) are annotated
+    if [ "$has_svc" = true ]; then
+      kube::test::get_object_assert 'services mock' "{{${annotations_field}.annotated}}" 'true'
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert 'services mock2' "{{${annotations_field}.annotated}}" 'true'
+      fi
+    fi
+    if [ "$has_rc" = true ]; then
+      kube::test::get_object_assert 'rc mock' "{{${annotations_field}.annotated}}" 'true'
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert 'rc mock2' "{{${annotations_field}.annotated}}" 'true'
+      fi
+    fi
+    # Cleanup resources created
+    kubectl delete -f "${file}" "${kube_flags[@]}"
   done
 
   ######################
@@ -906,7 +1242,7 @@ kube_api_versions=(
   v1
 )
 for version in "${kube_api_versions[@]}"; do
-  KUBE_API_VERSIONS="v1,experimental/v1alpha1" runTests "${version}"
+  KUBE_API_VERSIONS="v1,extensions/v1beta1" runTests "${version}"
 done
 
 kube::log::status "TEST PASSED"

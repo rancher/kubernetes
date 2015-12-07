@@ -51,8 +51,18 @@ func TestSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	expEtcdStorage, err := framework.NewExtensionsEtcdStorage(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	storageDestinations := master.NewStorageDestinations()
 	storageDestinations.AddAPIGroup("", etcdStorage)
+	storageDestinations.AddAPIGroup("extensions", expEtcdStorage)
+
+	storageVersions := make(map[string]string)
+	storageVersions[""] = testapi.Default.Version()
+	storageVersions["extensions"] = testapi.Extensions.GroupAndVersion()
 
 	var m *master.Master
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -70,11 +80,11 @@ func TestSecrets(t *testing.T) {
 		APIPrefix:             "/api",
 		Authorizer:            apiserver.NewAlwaysAllowAuthorizer(),
 		AdmissionControl:      admit.NewAlwaysAdmit(),
-		StorageVersions:       map[string]string{"": testapi.Default.Version()},
+		StorageVersions:       storageVersions,
 	})
 
 	framework.DeleteAllEtcdKeys()
-	client := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: s.URL, GroupVersion: testapi.Default.GroupVersion()})
 	DoTestSecrets(t, client, testapi.Default.Version())
 }
 

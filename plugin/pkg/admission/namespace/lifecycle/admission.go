@@ -53,7 +53,7 @@ func (l *lifecycle) Admit(a admission.Attributes) (err error) {
 
 	// prevent deletion of immortal namespaces
 	if a.GetOperation() == admission.Delete && a.GetKind() == "Namespace" && l.immortalNamespaces.Has(a.GetName()) {
-		return errors.NewForbidden(a.GetKind(), a.GetName(), fmt.Errorf("namespace can never be deleted"))
+		return errors.NewForbidden(a.GetKind(), a.GetName(), fmt.Errorf("this namespace may not be deleted"))
 	}
 
 	defaultVersion, kind, err := api.RESTMapper.VersionAndKindForResource(a.GetResource())
@@ -111,8 +111,8 @@ func NewLifecycle(c client.Interface) admission.Interface {
 			ListFunc: func() (runtime.Object, error) {
 				return c.Namespaces().List(labels.Everything(), fields.Everything())
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return c.Namespaces().Watch(labels.Everything(), fields.Everything(), resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return c.Namespaces().Watch(labels.Everything(), fields.Everything(), options)
 			},
 		},
 		&api.Namespace{},

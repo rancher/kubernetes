@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/examples/README.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/examples/README.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -33,8 +33,10 @@ Documentation for other releases can be found at
 
 # Kubernetes Examples: releases.k8s.io/HEAD
 
-This directory contains a number of different examples of how to run
-applications with Kubernetes.
+This directory contains a number of examples of how to run
+real applications with Kubernetes.
+
+Demonstrations of how to use specific Kubernetes features can be found in our [documents](../docs/).
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

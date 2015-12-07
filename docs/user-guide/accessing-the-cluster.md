@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/user-guide/accessing-the-cluster.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/user-guide/accessing-the-cluster.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -135,7 +135,7 @@ The above example uses the `--insecure` flag.  This leaves it subject to MITM
 attacks.  When kubectl accesses the cluster it uses a stored root certificate
 and client certificates to access the server.  (These are installed in the
 `~/.kube` directory).  Since cluster certificates are typically self-signed, it
-make take special configuration to get your http client to use root
+may take special configuration to get your http client to use root
 certificate.
 
 On some clusters, the apiserver does not require authentication; it may serve

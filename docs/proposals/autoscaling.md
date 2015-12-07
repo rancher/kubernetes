@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/proposals/autoscaling.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/proposals/autoscaling.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -30,6 +30,14 @@ Documentation for other releases can be found at
 <!-- END STRIP_FOR_RELEASE -->
 
 <!-- END MUNGE: UNVERSIONED_WARNING -->
+
+---
+
+# WARNING:
+
+## This document is outdated. It is superseded by [the horizontal pod autoscaler design doc](../design/horizontal-pod-autoscaler.md).
+
+---
 
 ## Abstract
 

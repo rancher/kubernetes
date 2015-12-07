@@ -29,6 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
 	watchjson "k8s.io/kubernetes/pkg/watch/json"
@@ -38,10 +39,9 @@ import (
 
 type APIInstaller struct {
 	group             *APIGroupVersion
-	info              *APIRequestInfoResolver
+	info              *RequestInfoResolver
 	prefix            string // Path prefix where API resources are to be registered.
 	minRequestTimeout time.Duration
-	proxyDialerFn     ProxyDialerFunc
 }
 
 // Struct capturing information about an action ("GET", "POST", "WATCH", PROXY", etc).
@@ -61,10 +61,10 @@ type documentable interface {
 var errEmptyName = errors.NewBadRequest("name must be provided")
 
 // Installs handlers for API resources.
-func (a *APIInstaller) Install(ws *restful.WebService) (apiResources []api.APIResource, errors []error) {
+func (a *APIInstaller) Install(ws *restful.WebService) (apiResources []unversioned.APIResource, errors []error) {
 	errors = make([]error, 0)
 
-	proxyHandler := (&ProxyHandler{a.prefix + "/proxy/", a.group.Storage, a.group.Codec, a.group.Context, a.info, a.proxyDialerFn})
+	proxyHandler := (&ProxyHandler{a.prefix + "/proxy/", a.group.Storage, a.group.Codec, a.group.Context, a.info})
 
 	// Register the paths in a deterministic (sorted) order to get a deterministic swagger spec.
 	paths := make([]string, len(a.group.Storage))
@@ -95,18 +95,18 @@ func (a *APIInstaller) NewWebService() *restful.WebService {
 	// TODO: change to restful.MIME_JSON when we set content type in client
 	ws.Consumes("*/*")
 	ws.Produces(restful.MIME_JSON)
-	ws.ApiVersion(a.group.Version)
+	ws.ApiVersion(a.group.GroupVersion.String())
 
 	return ws
 }
 
-func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService, proxyHandler http.Handler) (*api.APIResource, error) {
+func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService, proxyHandler http.Handler) (*unversioned.APIResource, error) {
 	admit := a.group.Admit
 	context := a.group.Context
 
-	serverVersion := a.group.ServerVersion
-	if len(serverVersion) == 0 {
-		serverVersion = a.group.Version
+	serverGroupVersion := a.group.GroupVersion
+	if a.group.ServerGroupVersion != nil {
+		serverGroupVersion = *a.group.ServerGroupVersion
 	}
 
 	var resource, subresource string
@@ -126,13 +126,13 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	if err != nil {
 		return nil, err
 	}
-	versionedPtr, err := a.group.Creater.New(a.group.Version, kind)
+	versionedPtr, err := a.group.Creater.New(a.group.GroupVersion.String(), kind)
 	if err != nil {
 		return nil, err
 	}
 	versionedObject := indirectArbitraryPointer(versionedPtr)
 
-	mapping, err := a.group.Mapper.RESTMapping(kind, a.group.Version)
+	mapping, err := a.group.Mapper.RESTMapping(kind, a.group.GroupVersion.String())
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		if err != nil {
 			return nil, err
 		}
-		parentMapping, err := a.group.Mapper.RESTMapping(parentKind, a.group.Version)
+		parentMapping, err := a.group.Mapper.RESTMapping(parentKind, a.group.GroupVersion.String())
 		if err != nil {
 			return nil, err
 		}
@@ -181,14 +181,14 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	if isLister {
 		list := lister.NewList()
 		_, listKind, err := a.group.Typer.ObjectVersionAndKind(list)
-		versionedListPtr, err := a.group.Creater.New(a.group.Version, listKind)
+		versionedListPtr, err := a.group.Creater.New(a.group.GroupVersion.String(), listKind)
 		if err != nil {
 			return nil, err
 		}
 		versionedList = indirectArbitraryPointer(versionedListPtr)
 	}
 
-	versionedListOptions, err := a.group.Creater.New(serverVersion, "ListOptions")
+	versionedListOptions, err := a.group.Creater.New(serverGroupVersion.String(), "ListOptions")
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	var versionedDeleterObject interface{}
 	switch {
 	case isGracefulDeleter:
-		objectPtr, err := a.group.Creater.New(serverVersion, "DeleteOptions")
+		objectPtr, err := a.group.Creater.New(serverGroupVersion.String(), "DeleteOptions")
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +206,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		gracefulDeleter = rest.GracefulDeleteAdapter{Deleter: deleter}
 	}
 
-	versionedStatusPtr, err := a.group.Creater.New(serverVersion, "Status")
+	versionedStatusPtr, err := a.group.Creater.New(serverGroupVersion.String(), "Status")
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		if err != nil {
 			return nil, err
 		}
-		versionedGetOptions, err = a.group.Creater.New(serverVersion, getOptionsKind)
+		versionedGetOptions, err = a.group.Creater.New(serverGroupVersion.String(), getOptionsKind)
 		if err != nil {
 			return nil, err
 		}
@@ -245,7 +245,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			if err != nil {
 				return nil, err
 			}
-			versionedConnectOptions, err = a.group.Creater.New(serverVersion, connectOptionsKind)
+			versionedConnectOptions, err = a.group.Creater.New(serverGroupVersion.String(), connectOptionsKind)
 		}
 	}
 
@@ -267,7 +267,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	params := []*restful.Parameter{}
 	actions := []action{}
 
-	var apiResource api.APIResource
+	var apiResource unversioned.APIResource
 	// Get the list of actions for the given scope.
 	switch scope.Name() {
 	case meta.RESTScopeNameRoot:
@@ -379,8 +379,8 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		Creater:          a.group.Creater,
 		Convertor:        a.group.Convertor,
 		Codec:            mapping.Codec,
-		APIVersion:       a.group.Version,
-		ServerAPIVersion: serverVersion,
+		APIVersion:       a.group.GroupVersion.String(),
+		ServerAPIVersion: serverGroupVersion.String(),
 		Resource:         resource,
 		Subresource:      subresource,
 		Kind:             kind,
@@ -480,7 +480,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				Operation("patch"+namespaced+kind+strings.Title(subresource)).
 				Produces(append(storageMeta.ProducesMIMETypes(action.Verb), "application/json")...).
 				Returns(http.StatusOK, "OK", versionedObject).
-				Reads(api.Patch{}).
+				Reads(unversioned.Patch{}).
 				Writes(versionedObject)
 			addParams(route, action.Params)
 			ws.Route(route)
@@ -828,17 +828,17 @@ func addObjectParams(ws *restful.WebService, route *restful.RouteBuilder, obj in
 // Convert the name of a golang type to the name of a JSON type
 func typeToJSON(typeName string) string {
 	switch typeName {
-	case "bool":
+	case "bool", "*bool":
 		return "boolean"
-	case "uint8", "int", "int32", "int64", "uint32", "uint64":
+	case "uint8", "*uint8", "int", "*int", "int32", "*int32", "int64", "*int64", "uint32", "*uint32", "uint64", "*uint64":
 		return "integer"
-	case "float64", "float32":
+	case "float64", "*float64", "float32", "*float32":
 		return "number"
-	case "unversioned.Time":
+	case "unversioned.Time", "*unversioned.Time":
 		return "string"
-	case "byte":
+	case "byte", "*byte":
 		return "string"
-	case "[]string":
+	case "[]string", "[]*string":
 		// TODO: Fix this when go-restful supports a way to specify an array query param:
 		// https://github.com/emicklei/go-restful/issues/225
 		return "string"

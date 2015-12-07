@@ -35,11 +35,12 @@ import (
 	"github.com/golang/glog"
 	skymsg "github.com/skynetservices/skydns/msg"
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	kcache "k8s.io/kubernetes/pkg/client/cache"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	kframework "k8s.io/kubernetes/pkg/controller/framework"
-	kSelector "k8s.io/kubernetes/pkg/fields"
+	kselector "k8s.io/kubernetes/pkg/fields"
 	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/wait"
@@ -130,7 +131,7 @@ func (ks *kube2sky) newHeadlessService(subdomain string, service *kapi.Service) 
 		return fmt.Errorf("failed to get endpoints object from endpoints store - %v", err)
 	}
 	if !exists {
-		glog.V(1).Infof("could not find endpoints for service %q in namespace %q. DNS records will be created once endpoints show up.", service.Name, service.Namespace)
+		glog.V(1).Infof("Could not find endpoints for service %q in namespace %q. DNS records will be created once endpoints show up.", service.Name, service.Namespace)
 		return nil
 	}
 	if e, ok := e.(*kapi.Endpoints); ok {
@@ -379,17 +380,17 @@ func buildDNSNameString(labels ...string) string {
 
 // Returns a cache.ListWatch that gets all changes to services.
 func createServiceLW(kubeClient *kclient.Client) *kcache.ListWatch {
-	return kcache.NewListWatchFromClient(kubeClient, "services", kapi.NamespaceAll, kSelector.Everything())
+	return kcache.NewListWatchFromClient(kubeClient, "services", kapi.NamespaceAll, kselector.Everything())
 }
 
 // Returns a cache.ListWatch that gets all changes to endpoints.
 func createEndpointsLW(kubeClient *kclient.Client) *kcache.ListWatch {
-	return kcache.NewListWatchFromClient(kubeClient, "endpoints", kapi.NamespaceAll, kSelector.Everything())
+	return kcache.NewListWatchFromClient(kubeClient, "endpoints", kapi.NamespaceAll, kselector.Everything())
 }
 
 // Returns a cache.ListWatch that gets all changes to pods.
 func createEndpointsPodLW(kubeClient *kclient.Client) *kcache.ListWatch {
-	return kcache.NewListWatchFromClient(kubeClient, "pods", kapi.NamespaceAll, kSelector.Everything())
+	return kcache.NewListWatchFromClient(kubeClient, "pods", kapi.NamespaceAll, kselector.Everything())
 }
 
 func (ks *kube2sky) newService(obj interface{}) {
@@ -479,8 +480,8 @@ func newKubeClient() (*kclient.Client, error) {
 	if masterURL != "" && *argKubecfgFile == "" {
 		// Only --kube_master_url was provided.
 		config = &kclient.Config{
-			Host:    masterURL,
-			Version: "v1",
+			Host:         masterURL,
+			GroupVersion: &unversioned.GroupVersion{Version: "v1"},
 		}
 	} else {
 		// We either have:
@@ -498,7 +499,7 @@ func newKubeClient() (*kclient.Client, error) {
 	}
 
 	glog.Infof("Using %s for kubernetes master", config.Host)
-	glog.Infof("Using kubernetes API %s", config.Version)
+	glog.Infof("Using kubernetes API %v", config.GroupVersion)
 	return kclient.New(config)
 }
 

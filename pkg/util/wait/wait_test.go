@@ -26,8 +26,10 @@ import (
 )
 
 func TestPoller(t *testing.T) {
+	done := make(chan struct{})
+	defer close(done)
 	w := poller(time.Millisecond, 2*time.Millisecond)
-	ch := w()
+	ch := w(done)
 	count := 0
 DRAIN:
 	for {
@@ -47,16 +49,20 @@ DRAIN:
 }
 
 func fakeTicker(max int, used *int32) WaitFunc {
-	return func() <-chan struct{} {
+	return func(done <-chan struct{}) <-chan struct{} {
 		ch := make(chan struct{})
 		go func() {
+			defer close(ch)
 			for i := 0; i < max; i++ {
-				ch <- struct{}{}
+				select {
+				case ch <- struct{}{}:
+				case <-done:
+					return
+				}
 				if used != nil {
 					atomic.AddInt32(used, 1)
 				}
 			}
-			close(ch)
 		}()
 		return ch
 	}
@@ -155,6 +161,7 @@ func TestPollForever(t *testing.T) {
 			}
 			return false, nil
 		})
+
 		if err := PollInfinite(time.Microsecond, f); err != nil {
 			t.Fatalf("unexpected error %v", err)
 		}
@@ -232,7 +239,11 @@ func TestWaitFor(t *testing.T) {
 	for k, c := range testCases {
 		invocations = 0
 		ticker := fakeTicker(c.Ticks, nil)
-		err := WaitFor(ticker, c.F)
+		err := func() error {
+			done := make(chan struct{})
+			defer close(done)
+			return WaitFor(ticker, c.F, done)
+		}()
 		switch {
 		case c.Err && err == nil:
 			t.Errorf("%s: Expected error, got nil", k)
@@ -244,5 +255,20 @@ func TestWaitFor(t *testing.T) {
 		if invocations != c.Invoked {
 			t.Errorf("%s: Expected %d invocations, got %d", k, c.Invoked, invocations)
 		}
+	}
+}
+
+func TestWaitForWithDelay(t *testing.T) {
+	done := make(chan struct{})
+	defer close(done)
+	WaitFor(poller(time.Millisecond, util.ForeverTestTimeout), func() (bool, error) {
+		time.Sleep(10 * time.Millisecond)
+		return true, nil
+	}, done)
+	// If polling goroutine doesn't see the done signal it will leak timers.
+	select {
+	case done <- struct{}{}:
+	case <-time.After(util.ForeverTestTimeout):
+		t.Errorf("expected an ack of the done signal.")
 	}
 }

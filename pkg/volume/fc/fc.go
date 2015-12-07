@@ -164,6 +164,14 @@ type fcDiskBuilder struct {
 
 var _ volume.Builder = &fcDiskBuilder{}
 
+func (b *fcDiskBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    b.readOnly,
+		Managed:                     !b.readOnly,
+		SupportsOwnershipManagement: true,
+		SupportsSELinux:             true,
+	}
+}
 func (b *fcDiskBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
 }
@@ -182,10 +190,6 @@ type fcDiskCleaner struct {
 }
 
 var _ volume.Cleaner = &fcDiskCleaner{}
-
-func (b *fcDiskBuilder) IsReadOnly() bool {
-	return b.readOnly
-}
 
 // Unmounts the bind mount, and detaches the disk only if the disk
 // resource was the last reference to that disk on the kubelet.

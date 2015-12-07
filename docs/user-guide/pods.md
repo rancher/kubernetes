@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/user-guide/pods.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/user-guide/pods.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -32,6 +32,23 @@ Documentation for other releases can be found at
 <!-- END MUNGE: UNVERSIONED_WARNING -->
 
 # Pods
+
+**Table of Contents**
+<!-- BEGIN MUNGE: GENERATED_TOC -->
+
+- [Pods](#pods)
+  - [What is a _pod_?](#what-is-a-pod)
+  - [Motivation for pods](#motivation-for-pods)
+    - [Resource sharing and communication](#resource-sharing-and-communication)
+    - [Management](#management)
+  - [Uses of pods](#uses-of-pods)
+  - [Alternatives considered](#alternatives-considered)
+  - [Durability of pods (or lack thereof)](#durability-of-pods-or-lack-thereof)
+  - [Termination of Pods](#termination-of-pods)
+  - [Privileged mode for pod containers](#privileged-mode-for-pod-containers)
+  - [API Object](#api-object)
+
+<!-- END MUNGE: GENERATED_TOC -->
 
 In Kubernetes, rather than individual application containers, _pods_ are the smallest deployable units that can be created, scheduled, and managed.
 
@@ -77,6 +94,8 @@ Pods can be used to host vertically integrated application stacks, but their pri
 * controllers, managers, configurators, and updaters
 
 Individual pods are not intended to run multiple instances of the same application, in general.
+
+For a longer explanation, see [The Distributed System ToolKit: Patterns for Composite Containers](http://blog.kubernetes.io/2015/06/the-distributed-system-toolkit-patterns.html).
 
 ## Alternatives considered
 
@@ -145,7 +164,7 @@ spec.containers[0].securityContext.privileged: forbidden '<*>(0xc20b222db0)true'
 
 Pod is a top-level resource in the kubernetes REST API. More details about the
 API object can be found at: [Pod API
-object](https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/HEAD/docs/api-reference/definitions.html#_v1_pod).
+object](https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/blob/HEAD/docs/api-reference/v1/definitions.html#_v1_pod).
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

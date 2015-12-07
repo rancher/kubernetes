@@ -47,15 +47,27 @@ const (
 // the ginkgo.skip list (see driver.go).
 // To run this suite you must explicitly ask for it by setting the
 // -t/--test flag or ginkgo.focus flag.
-var _ = Describe("Load capacity", func() {
+var _ = Describe("[Performance] Load capacity [Skipped]", func() {
 	var c *client.Client
 	var nodeCount int
 	var ns string
 	var configs []*RCConfig
-	framework := Framework{BaseName: "load", NamespaceDeletionTimeout: time.Hour}
+
+	// Gathers metrics before teardown
+	// TODO add flag that allows to skip cleanup on failure
+	AfterEach(func() {
+		deleteAllRC(configs)
+
+		// Verify latency metrics
+		highLatencyRequests, err := HighLatencyRequests(c)
+		expectNoError(err, "Too many instances metrics above the threshold")
+		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0))
+	})
+
+	framework := NewFramework("load")
+	framework.NamespaceDeletionTimeout = time.Hour
 
 	BeforeEach(func() {
-		framework.beforeEach()
 		c = framework.Client
 		ns = framework.Namespace.Name
 		nodes, err := c.Nodes().List(labels.Everything(), fields.Everything())
@@ -72,18 +84,6 @@ var _ = Describe("Load capacity", func() {
 		expectNoError(resetMetrics(c))
 	})
 
-	// TODO add flag that allows to skip cleanup on failure
-	AfterEach(func() {
-		deleteAllRC(configs)
-
-		// Verify latency metrics
-		highLatencyRequests, err := HighLatencyRequests(c, 3*time.Second)
-		expectNoError(err, "Too many instances metrics above the threshold")
-		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0))
-
-		framework.afterEach()
-	})
-
 	type Load struct {
 		podsPerNode int
 		image       string
@@ -97,7 +97,7 @@ var _ = Describe("Load capacity", func() {
 	}
 
 	for _, testArg := range loadTests {
-		name := fmt.Sprintf("[Skipped] [Performance suite] should be able to handle %v pods per node", testArg.podsPerNode)
+		name := fmt.Sprintf("should be able to handle %v pods per node", testArg.podsPerNode)
 		itArg := testArg
 
 		It(name, func() {

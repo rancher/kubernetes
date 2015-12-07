@@ -27,11 +27,11 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/controller/resourcequota"
+	resourcequotacontroller "k8s.io/kubernetes/pkg/controller/resourcequota"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -51,10 +51,10 @@ type quota struct {
 func NewResourceQuota(client client.Interface) admission.Interface {
 	lw := &cache.ListWatch{
 		ListFunc: func() (runtime.Object, error) {
-			return client.ResourceQuotas(api.NamespaceAll).List(labels.Everything())
+			return client.ResourceQuotas(api.NamespaceAll).List(labels.Everything(), fields.Everything())
 		},
-		WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-			return client.ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), resourceVersion)
+		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+			return client.ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), options)
 		},
 	}
 	indexer, reflector := cache.NewNamespaceKeyedIndexerAndReflector(lw, &api.ResourceQuota{}, 0)
@@ -168,6 +168,12 @@ func (q *quota) Admit(a admission.Attributes) (err error) {
 // Return true if the usage must be recorded prior to admitting the new resource
 // Return an error if the operation should not pass admission control
 func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, client client.Interface) (bool, error) {
+	// on update, the only resource that can modify the value of a quota is pods
+	// so if your not a pod, we exit quickly
+	if a.GetOperation() == admission.Update && a.GetResource() != "pods" {
+		return false, nil
+	}
+
 	var errs []error
 	dirty := true
 	set := map[api.ResourceName]bool{}
@@ -217,7 +223,7 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 			delta, err := resourcequotacontroller.PodRequests(pod, resourceName)
 
 			if err != nil {
-				return false, fmt.Errorf("must make a non-zero request for %s since it is tracked by quota.", resourceName)
+				return false, fmt.Errorf("%s is limited by quota, must make explicit request.", resourceName)
 			}
 
 			// if this operation is an update, we need to find the delta usage from the previous state
@@ -252,7 +258,7 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 			}
 
 			if newUsageValue > hardUsageValue {
-				errs = append(errs, fmt.Errorf("unable to admit pod without exceeding quota for resource %s:  limited to %s but require %s to succeed.", resourceName, hard.String(), newUsage.String()))
+				errs = append(errs, fmt.Errorf("%s quota is %s, current usage is %s, requesting %s.", resourceName, hard.String(), used.String(), delta.String()))
 				dirty = false
 			} else {
 				status.Used[resourceName] = *newUsage
@@ -261,5 +267,5 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 		}
 	}
 
-	return dirty, errors.NewAggregate(errs)
+	return dirty, utilerrors.NewAggregate(errs)
 }

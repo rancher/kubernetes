@@ -69,6 +69,7 @@ type MinionServer struct {
 	runProxy     bool
 	proxyLogV    int
 	proxyBindall bool
+	proxyMode    string
 }
 
 // NewMinionServer creates the MinionServer struct with default values to be used by hyperkube
@@ -82,6 +83,7 @@ func NewMinionServer() *MinionServer {
 		logMaxBackups:         config.DefaultLogMaxBackups,
 		logMaxAgeInDays:       config.DefaultLogMaxAgeInDays,
 		runProxy:              true,
+		proxyMode:             "userspace", // upstream default is "iptables" post-v1.1
 	}
 
 	// cache this for later use
@@ -136,6 +138,7 @@ func (ms *MinionServer) launchProxyServer() {
 		fmt.Sprintf("--v=%d", ms.proxyLogV),
 		"--logtostderr=true",
 		"--resource-container=" + path.Join("/", ms.mesosCgroup, "kube-proxy"),
+		"--proxy-mode=" + ms.proxyMode,
 	}
 
 	if ms.clientConfig.Host != "" {
@@ -206,17 +209,23 @@ func (ms *MinionServer) launchHyperkubeServer(server string, args []string, logF
 		}
 	}
 
-	// use given environment, but add /usr/sbin to the path for the iptables binary used in kube-proxy
+	// use given environment, but add /usr/sbin and $SANDBOX/bin to the path for the iptables binary used in kube-proxy
 	var kmEnv []string
-	if ms.pathOverride != "" {
-		env := os.Environ()
-		kmEnv = make([]string, 0, len(env))
-		for _, e := range env {
-			if !strings.HasPrefix(e, "PATH=") {
-				kmEnv = append(kmEnv, e)
+	env := os.Environ()
+	kmEnv = make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, "PATH=") {
+			kmEnv = append(kmEnv, e)
+		} else {
+			if ms.pathOverride != "" {
+				e = "PATH=" + ms.pathOverride
 			}
+			pwd, err := os.Getwd()
+			if err != nil {
+				panic(fmt.Errorf("Cannot get current directory: %v", err))
+			}
+			kmEnv = append(kmEnv, fmt.Sprintf("%s:%s", e, path.Join(pwd, "bin")))
 		}
-		kmEnv = append(kmEnv, "PATH="+ms.pathOverride)
 	}
 
 	t := tasks.New(server, ms.kmBinary, kmArgs, kmEnv, writerFunc)
@@ -336,4 +345,5 @@ func (ms *MinionServer) AddMinionFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&ms.runProxy, "run-proxy", ms.runProxy, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
 	fs.IntVar(&ms.proxyLogV, "proxy-logv", ms.proxyLogV, "Log verbosity of the child kube-proxy.")
 	fs.BoolVar(&ms.proxyBindall, "proxy-bindall", ms.proxyBindall, "When true will cause kube-proxy to bind to 0.0.0.0.")
+	fs.StringVar(&ms.proxyMode, "proxy-mode", ms.proxyMode, "Which proxy mode to use: 'userspace' (older) or 'iptables' (faster). If the iptables proxy is selected, regardless of how, but the system's kernel or iptables versions are insufficient, this always falls back to the userspace proxy.")
 }

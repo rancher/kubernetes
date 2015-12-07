@@ -192,6 +192,15 @@ type rbdBuilder struct {
 
 var _ volume.Builder = &rbdBuilder{}
 
+func (b *rbd) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    b.ReadOnly,
+		Managed:                     !b.ReadOnly,
+		SupportsOwnershipManagement: true,
+		SupportsSELinux:             true,
+	}
+}
+
 func (b *rbdBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
 }
@@ -201,18 +210,8 @@ func (b *rbdBuilder) SetUpAt(dir string) error {
 	err := diskSetUp(b.manager, *b, dir, b.mounter)
 	if err != nil {
 		glog.Errorf("rbd: failed to setup")
-		return err
 	}
-	globalPDPath := b.manager.MakeGlobalPDName(*b.rbd)
-	// make mountpoint rw/ro work as expected
-	//FIXME revisit pkg/util/mount and ensure rw/ro is implemented as expected
-	mode := "rw"
-	if b.ReadOnly {
-		mode = "ro"
-	}
-	b.plugin.execCommand("mount", []string{"-o", "remount," + mode, globalPDPath, dir})
-
-	return nil
+	return err
 }
 
 type rbdCleaner struct {
@@ -220,10 +219,6 @@ type rbdCleaner struct {
 }
 
 var _ volume.Cleaner = &rbdCleaner{}
-
-func (b *rbd) IsReadOnly() bool {
-	return b.ReadOnly
-}
 
 // Unmounts the bind mount, and detaches the disk only if the disk
 // resource was the last reference to that disk on the kubelet.

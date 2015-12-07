@@ -24,6 +24,19 @@ KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
 
 DEFAULT_KUBECONFIG="${HOME}/.kube/config"
 
+# KUBE_RELEASE_VERSION_REGEX matches things like "v1.2.3" or "v1.2.3-alpha.4"
+#
+# NOTE This must match the version_regex in build/common.sh
+# kube::release::parse_and_validate_release_version()
+KUBE_RELEASE_VERSION_REGEX="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(beta|alpha)\\.(0|[1-9][0-9]*))?$"
+
+# KUBE_CI_VERSION_REGEX matches things like "v1.2.3-alpha.4.56+abcdefg" This
+#
+# NOTE This must match the version_regex in build/common.sh
+# kube::release::parse_and_validate_ci_version()
+KUBE_CI_VERSION_REGEX="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-(beta|alpha)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)\\+[-0-9a-z]*)?$"
+
+
 # Generate kubeconfig data for the created cluster.
 # Assumed vars:
 #   KUBE_USER
@@ -108,9 +121,8 @@ function clear-kubeconfig() {
   "${kubectl}" config unset "users.${CONTEXT}-basic-auth"
   "${kubectl}" config unset "contexts.${CONTEXT}"
 
-  local current
-  current=$("${kubectl}" config view -o template --template='{{ index . "current-context" }}')
-  if [[ "${current}" == "${CONTEXT}" ]]; then
+  local cc=$("${kubectl}" config view -o jsonpath='{.current-context}')
+  if [[ "${cc}" == "${CONTEXT}" ]]; then
     "${kubectl}" config unset current-context
   fi
 
@@ -129,6 +141,7 @@ function tear_down_alive_resources() {
 # Gets username, password for the current-context in kubeconfig, if they exist.
 # Assumed vars:
 #   KUBECONFIG  # if unset, defaults to global
+#   KUBE_CONTEXT  # if unset, defaults to current-context
 #
 # Vars set:
 #   KUBE_USER
@@ -138,21 +151,14 @@ function tear_down_alive_resources() {
 # the current-context user does not exist or contain basicauth entries.
 function get-kubeconfig-basicauth() {
   export KUBECONFIG=${KUBECONFIG:-$DEFAULT_KUBECONFIG}
-  # Templates to safely extract the username,password for the current-context
-  # user.  The long chain of 'with' commands avoids indexing nil if any of the
-  # entries ("current-context", "contexts"."current-context", "users", etc)
-  # is missing.
-  # Note: we save dot ('.') to $root because the 'with' action overrides it.
-  # See http://golang.org/pkg/text/template/.
-  local username='{{$dot := .}}{{with $ctx := index $dot "current-context"}}{{range $element := (index $dot "contexts")}}{{ if eq .name $ctx }}{{ with $user := .context.user }}{{range $element := (index $dot "users")}}{{ if eq .name $user }}{{ index . "user" "username" }}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}'
-  local password='{{$dot := .}}{{with $ctx := index $dot "current-context"}}{{range $element := (index $dot "contexts")}}{{ if eq .name $ctx }}{{ with $user := .context.user }}{{range $element := (index $dot "users")}}{{ if eq .name $user }}{{ index . "user" "password" }}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}'
-  KUBE_USER=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${username}")
-  KUBE_PASSWORD=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${password}")
-  # Handle empty/missing username|password
-  if [[ "${KUBE_USER}" == '<no value>' || "$KUBE_PASSWORD" == '<no value>' ]]; then
-    KUBE_USER=''
-    KUBE_PASSWORD=''
+
+  local cc=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.current-context}")
+  if [[ ! -z "${KUBE_CONTEXT:-}" ]]; then
+    cc="${KUBE_CONTEXT}"
   fi
+  local user=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.contexts[?(@.name == \"${cc}\")].context.user}")
+  KUBE_USER=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.users[?(@.name == \"${user}\")].user.username}")
+  KUBE_PASSWORD=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.users[?(@.name == \"${user}\")].user.password}")
 }
 
 # Generate basic auth user and password.
@@ -168,6 +174,7 @@ function gen-kube-basicauth() {
 # Get the bearer token for the current-context in kubeconfig if one exists.
 # Assumed vars:
 #   KUBECONFIG  # if unset, defaults to global
+#   KUBE_CONTEXT  # if unset, defaults to current-context
 #
 # Vars set:
 #   KUBE_BEARER_TOKEN
@@ -176,18 +183,13 @@ function gen-kube-basicauth() {
 # current-context user does not exist or contain a bearer token entry.
 function get-kubeconfig-bearertoken() {
   export KUBECONFIG=${KUBECONFIG:-$DEFAULT_KUBECONFIG}
-  # Template to safely extract the token for the current-context user.
-  # The long chain of 'with' commands avoids indexing nil if any of the
-  # entries ("current-context", "contexts"."current-context", "users", etc)
-  # is missing.
-  # Note: we save dot ('.') to $root because the 'with' action overrides it.
-  # See http://golang.org/pkg/text/template/.
-  local token='{{$dot := .}}{{with $ctx := index $dot "current-context"}}{{range $element := (index $dot "contexts")}}{{ if eq .name $ctx }}{{ with $user := .context.user }}{{range $element := (index $dot "users")}}{{ if eq .name $user }}{{ index . "user" "token" }}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}'
-  KUBE_BEARER_TOKEN=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${token}")
-  # Handle empty/missing token
-  if [[ "${KUBE_BEARER_TOKEN}" == '<no value>' ]]; then
-    KUBE_BEARER_TOKEN=''
+
+  local cc=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.current-context}")
+  if [[ ! -z "${KUBE_CONTEXT:-}" ]]; then
+    cc="${KUBE_CONTEXT}"
   fi
+  local user=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.contexts[?(@.name == \"${cc}\")].context.user}")
+  KUBE_BEARER_TOKEN=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.users[?(@.name == \"${user}\")].user.token}")
 }
 
 # Generate bearer token.
@@ -198,10 +200,31 @@ function gen-kube-bearertoken() {
     KUBE_BEARER_TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
 }
 
+
+function load-or-gen-kube-basicauth() {
+  if [[ ! -z "${KUBE_CONTEXT:-}" ]]; then
+    get-kubeconfig-basicauth
+  fi
+
+  if [[ -z "${KUBE_USER:-}" || -z "${KUBE_PASSWORD:-}" ]]; then
+    gen-kube-basicauth
+  fi
+}
+
+function load-or-gen-kube-bearertoken() {
+  if [[ ! -z "${KUBE_CONTEXT:-}" ]]; then
+    get-kubeconfig-bearertoken
+  fi
+  if [[ -z "${KUBE_BEARER_TOKEN:-}" ]]; then
+    gen-kube-bearertoken
+  fi
+}
+
 # Get the master IP for the current-context in kubeconfig if one exists.
 #
 # Assumed vars:
 #   KUBECONFIG  # if unset, defaults to global
+#   KUBE_CONTEXT  # if unset, defaults to current-context
 #
 # Vars set:
 #   KUBE_MASTER_URL
@@ -210,37 +233,29 @@ function gen-kube-bearertoken() {
 # current-context user does not exist or contain a server entry.
 function detect-master-from-kubeconfig() {
   export KUBECONFIG=${KUBECONFIG:-$DEFAULT_KUBECONFIG}
-  # Template to safely extract the server for the current-context cluster.
-  # The long chain of 'with' commands avoids indexing nil if any of the
-  # entries ("current-context", "contexts"."current-context", "users", etc)
-  # is missing.
-  # Note: we save dot ('.') to $root because the 'with' action overrides it.
-  # See http://golang.org/pkg/text/template/.
-  local server_tpl='{{$dot := .}}{{with $ctx := index $dot "current-context"}}{{range $element := (index $dot "contexts")}}{{ if eq .name $ctx }}{{ with $cluster := .context.cluster }}{{range $element := (index $dot "clusters")}}{{ if eq .name $cluster }}{{ index . "cluster" "server" }}{{end}}{{end}}{{end}}{{end}}{{end}}{{end}}'
-  KUBE_MASTER_URL=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o template --template="${server_tpl}")
-  # Handle empty/missing server
-  if [[ "${KUBE_MASTER_URL}" == '<no value>' ]]; then
-    KUBE_MASTER_URL=''
+
+  local cc=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.current-context}")
+  if [[ ! -z "${KUBE_CONTEXT:-}" ]]; then
+    cc="${KUBE_CONTEXT}"
   fi
+  local cluster=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.contexts[?(@.name == \"${cc}\")].context.cluster}")
+  KUBE_MASTER_URL=$("${KUBE_ROOT}/cluster/kubectl.sh" config view -o jsonpath="{.clusters[?(@.name == \"${cluster}\")].cluster.server}")
 }
 
-# Sets KUBE_VERSION variable to the version passed in as an argument, or if argument is
-# latest_stable, latest_release, or latest_ci fetches and sets the corresponding version number
+# Sets KUBE_VERSION variable to the proper version number (e.g. "v1.0.6",
+# "v1.2.0-alpha.1.881+376438b69c7612") or a version' publication of the form
+# <bucket>/<version> (e.g. "release/stable",' "ci/latest-1").
+#
+# See the docs on getting builds for more information about version
+# publication.
 #
 # Args:
 #   $1 version string from command line
 # Vars set:
 #   KUBE_VERSION
 function set_binary_version() {
-  if [[ "${1}" == "latest_stable" ]]; then
-    KUBE_VERSION=$(gsutil cat gs://kubernetes-release/release/stable.txt)
-    echo "Using latest stable version: ${KUBE_VERSION}" >&2
-  elif [[ "${1}" == "latest_release" ]]; then
-    KUBE_VERSION=$(gsutil cat gs://kubernetes-release/release/latest.txt)
-    echo "Using latest release version: ${KUBE_VERSION}" >&2
-  elif [[ "${1}" == "latest_ci" ]]; then
-    KUBE_VERSION=$(gsutil cat gs://kubernetes-release/ci/latest.txt)
-    echo "Using latest ci version: ${KUBE_VERSION}" >&2
+  if [[ "${1}" =~ "/" ]]; then
+    KUBE_VERSION=$(gsutil cat gs://kubernetes-release/${1}.txt)
   else
     KUBE_VERSION=${1}
   fi
@@ -251,8 +266,11 @@ function set_binary_version() {
 # use local dev binaries.
 #
 # Assumed vars:
-#   PROJECT
+#   KUBE_VERSION
+#   KUBE_RELEASE_VERSION_REGEX
+#   KUBE_CI_VERSION_REGEX
 # Vars set:
+#   KUBE_TAR_HASH
 #   SERVER_BINARY_TAR_URL
 #   SERVER_BINARY_TAR_HASH
 #   SALT_TAR_URL
@@ -261,7 +279,7 @@ function tars_from_version() {
   if [[ -z "${KUBE_VERSION-}" ]]; then
     find-release-tars
     upload-server-tars
-  elif [[ ${KUBE_VERSION} =~ ${KUBE_VERSION_REGEX} ]]; then
+  elif [[ ${KUBE_VERSION} =~ ${KUBE_RELEASE_VERSION_REGEX} ]]; then
     SERVER_BINARY_TAR_URL="https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/kubernetes-server-linux-amd64.tar.gz"
     SALT_TAR_URL="https://storage.googleapis.com/kubernetes-release/release/${KUBE_VERSION}/kubernetes-salt.tar.gz"
   elif [[ ${KUBE_VERSION} =~ ${KUBE_CI_VERSION_REGEX} ]]; then
@@ -271,20 +289,67 @@ function tars_from_version() {
     echo "Version doesn't match regexp" >&2
     exit 1
   fi
-  until SERVER_BINARY_TAR_HASH=$(curl --fail --silent "${SERVER_BINARY_TAR_URL}.sha1"); do
+  if ! SERVER_BINARY_TAR_HASH=$(curl -Ss --fail "${SERVER_BINARY_TAR_URL}.sha1"); then
     echo "Failure trying to curl release .sha1"
-  done
-  until SALT_TAR_HASH=$(curl --fail --silent "${SALT_TAR_URL}.sha1"); do
+  fi
+  if ! SALT_TAR_HASH=$(curl -Ss --fail "${SALT_TAR_URL}.sha1"); then
     echo "Failure trying to curl Salt tar .sha1"
-  done
+  fi
 
-  if ! curl -Ss --range 0-1 "${SERVER_BINARY_TAR_URL}" >&/dev/null; then
+  if ! curl -Ss --head "${SERVER_BINARY_TAR_URL}" >&/dev/null; then
     echo "Can't find release at ${SERVER_BINARY_TAR_URL}" >&2
     exit 1
   fi
-  if ! curl -Ss --range 0-1 "${SALT_TAR_URL}" >&/dev/null; then
+  if ! curl -Ss --head "${SALT_TAR_URL}" >&/dev/null; then
     echo "Can't find Salt tar at ${SALT_TAR_URL}" >&2
     exit 1
   fi
 }
 
+# Verify and find the various tar files that we are going to use on the server.
+#
+# Assumed vars:
+#   KUBE_ROOT
+# Vars set:
+#   SERVER_BINARY_TAR
+#   SALT_TAR
+function find-release-tars() {
+  SERVER_BINARY_TAR="${KUBE_ROOT}/server/kubernetes-server-linux-amd64.tar.gz"
+  if [[ ! -f "$SERVER_BINARY_TAR" ]]; then
+    SERVER_BINARY_TAR="${KUBE_ROOT}/_output/release-tars/kubernetes-server-linux-amd64.tar.gz"
+  fi
+  if [[ ! -f "$SERVER_BINARY_TAR" ]]; then
+    echo "!!! Cannot find kubernetes-server-linux-amd64.tar.gz" >&2
+    exit 1
+  fi
+
+  SALT_TAR="${KUBE_ROOT}/server/kubernetes-salt.tar.gz"
+  if [[ ! -f "$SALT_TAR" ]]; then
+    SALT_TAR="${KUBE_ROOT}/_output/release-tars/kubernetes-salt.tar.gz"
+  fi
+  if [[ ! -f "$SALT_TAR" ]]; then
+    echo "!!! Cannot find kubernetes-salt.tar.gz" >&2
+    exit 1
+  fi
+}
+
+# Discover the git version of the current build package
+#
+# Assumed vars:
+#   KUBE_ROOT
+# Vars set:
+#   KUBE_GIT_VERSION
+function find-release-version() {
+  KUBE_GIT_VERSION=""
+  if [[ -f "${KUBE_ROOT}/version" ]]; then
+    KUBE_GIT_VERSION="$(cat ${KUBE_ROOT}/version)"
+  fi
+  if [[ -f "${KUBE_ROOT}/_output/full/kubernetes/version" ]]; then
+    KUBE_GIT_VERSION="$(cat ${KUBE_ROOT}/_output/full/kubernetes/version)"
+  fi
+
+  if [[ -z "${KUBE_GIT_VERSION}" ]]; then
+    echo "!!! Cannot find release version"
+    exit 1
+  fi
+}

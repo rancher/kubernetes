@@ -21,13 +21,13 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/rest"
-	"k8s.io/kubernetes/pkg/apis/experimental"
-	"k8s.io/kubernetes/pkg/apis/experimental/validation"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/apis/extensions/validation"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 )
 
 // strategy implements behavior for ThirdPartyResource objects
@@ -51,8 +51,12 @@ func (strategy) NamespaceScoped() bool {
 func (strategy) PrepareForCreate(obj runtime.Object) {
 }
 
-func (strategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
-	return validation.ValidateThirdPartyResourceData(obj.(*experimental.ThirdPartyResourceData))
+func (strategy) Validate(ctx api.Context, obj runtime.Object) utilvalidation.ErrorList {
+	return validation.ValidateThirdPartyResourceData(obj.(*extensions.ThirdPartyResourceData))
+}
+
+// Canonicalize normalizes the object after validation.
+func (strategy) Canonicalize(obj runtime.Object) {
 }
 
 func (strategy) AllowCreateOnUpdate() bool {
@@ -62,8 +66,8 @@ func (strategy) AllowCreateOnUpdate() bool {
 func (strategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
-func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
-	return validation.ValidateThirdPartyResourceDataUpdate(old.(*experimental.ThirdPartyResourceData), obj.(*experimental.ThirdPartyResourceData))
+func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
+	return validation.ValidateThirdPartyResourceDataUpdate(obj.(*extensions.ThirdPartyResourceData), old.(*extensions.ThirdPartyResourceData))
 }
 
 func (strategy) AllowUnconditionalUpdate() bool {
@@ -73,7 +77,7 @@ func (strategy) AllowUnconditionalUpdate() bool {
 // Matcher returns a generic matcher for a given label and field selector.
 func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
 	return generic.MatcherFunc(func(obj runtime.Object) (bool, error) {
-		sa, ok := obj.(*experimental.ThirdPartyResourceData)
+		sa, ok := obj.(*extensions.ThirdPartyResourceData)
 		if !ok {
 			return false, fmt.Errorf("not a ThirdPartyResourceData")
 		}
@@ -83,6 +87,6 @@ func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
 }
 
 // SelectableFields returns a label set that can be used for filter selection
-func SelectableFields(obj *experimental.ThirdPartyResourceData) labels.Set {
+func SelectableFields(obj *extensions.ThirdPartyResourceData) labels.Set {
 	return labels.Set{}
 }

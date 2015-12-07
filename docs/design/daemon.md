@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/design/daemon.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/design/daemon.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -71,7 +71,7 @@ The DaemonSet supports standard API features:
   - YAML example:
 
 ```YAML
-  apiVersion: v1
+  apiVersion: extensions/v1beta1
   kind: DaemonSet
   metadata:
     labels:
@@ -97,7 +97,7 @@ The DaemonSet supports standard API features:
     - get (e.g. kubectl get daemonsets)
     - describe
   - Modifiers
-    - delete (if --cascade=true, then first the client turns down all the pods controlled by the DaemonSet (by setting the nodeName to a non-existant name); then it deletes the DaemonSet; then it deletes the pods)
+    - delete (if --cascade=true, then first the client turns down all the pods controlled by the DaemonSet (by setting the nodeSelector to a uuid pair that is unlikely to be set on any node); then it deletes the DaemonSet; then it deletes the pods)
     - label
 	- annotate
     - update operations like patch and replace (only allowed to selector and to nodeSelector and nodeName of pod template)

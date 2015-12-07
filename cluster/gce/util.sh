@@ -39,13 +39,8 @@ KUBE_SKIP_UPDATE=${KUBE_SKIP_UPDATE-"n"}
 # multiple versions of the server are being used in the same project
 # simultaneously (e.g. on Jenkins).
 KUBE_GCS_STAGING_PATH_SUFFIX=${KUBE_GCS_STAGING_PATH_SUFFIX-""}
-
-# VERSION_REGEX matches things like "v0.13.1"
-readonly KUBE_VERSION_REGEX="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-
-# CI_VERSION_REGEX matches things like "v0.14.1-341-ge0c9d9e"
-readonly KUBE_CI_VERSION_REGEX="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-(.*)$"
-
+# How long (in seconds) to wait for cluster initialization.
+KUBE_CLUSTER_INITIALIZATION_TIMEOUT=${KUBE_CLUSTER_INITIALIZATION_TIMEOUT:-300}
 
 function join_csv {
   local IFS=','; echo "$*";
@@ -53,18 +48,6 @@ function join_csv {
 
 # Verify prereqs
 function verify-prereqs {
-  if [[ "${ENABLE_EXPERIMENTAL_API}" == "true" ]]; then
-    if [[ -z "${RUNTIME_CONFIG}" ]]; then
-      RUNTIME_CONFIG="experimental/v1alpha1=true"
-    else
-      # TODO: add checking if RUNTIME_CONFIG contains "experimental/v1alpha1=false" and appending "experimental/v1alpha1=true" if not.
-      if echo "${RUNTIME_CONFIG}" | grep -q -v "experimental/v1alpha1=true"; then
-        echo "Experimental API should be turned on, but is not turned on in RUNTIME_CONFIG!"
-        exit 1
-      fi
-    fi
-  fi
-
   local cmd
   for cmd in gcloud gsutil; do
     if ! which "${cmd}" >/dev/null; then
@@ -79,8 +62,8 @@ function verify-prereqs {
         curl https://sdk.cloud.google.com | bash
       fi
       if ! which "${cmd}" >/dev/null; then
-        echo "Can't find ${cmd} in PATH, please fix and retry. The Google Cloud "
-        echo "SDK can be downloaded from https://cloud.google.com/sdk/."
+        echo "Can't find ${cmd} in PATH, please fix and retry. The Google Cloud " >&2
+        echo "SDK can be downloaded from https://cloud.google.com/sdk/." >&2
         exit 1
       fi
     fi
@@ -96,8 +79,8 @@ function verify-prereqs {
   if [ ! -w $(dirname `which gcloud`) ]; then
     sudo_prefix="sudo"
   fi
-  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update preview || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update alpha || true
+  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update beta || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update || true
 }
 
@@ -109,31 +92,6 @@ function ensure-temp-dir {
   if [[ -z ${KUBE_TEMP-} ]]; then
     KUBE_TEMP=$(mktemp -d -t kubernetes.XXXXXX)
     trap 'rm -rf "${KUBE_TEMP}"' EXIT
-  fi
-}
-
-# Verify and find the various tar files that we are going to use on the server.
-#
-# Vars set:
-#   SERVER_BINARY_TAR
-#   SALT_TAR
-function find-release-tars {
-  SERVER_BINARY_TAR="${KUBE_ROOT}/server/kubernetes-server-linux-amd64.tar.gz"
-  if [[ ! -f "$SERVER_BINARY_TAR" ]]; then
-    SERVER_BINARY_TAR="${KUBE_ROOT}/_output/release-tars/kubernetes-server-linux-amd64.tar.gz"
-  fi
-  if [[ ! -f "$SERVER_BINARY_TAR" ]]; then
-    echo "!!! Cannot find kubernetes-server-linux-amd64.tar.gz"
-    exit 1
-  fi
-
-  SALT_TAR="${KUBE_ROOT}/server/kubernetes-salt.tar.gz"
-  if [[ ! -f "$SALT_TAR" ]]; then
-    SALT_TAR="${KUBE_ROOT}/_output/release-tars/kubernetes-salt.tar.gz"
-  fi
-  if [[ ! -f "$SALT_TAR" ]]; then
-    echo "!!! Cannot find kubernetes-salt.tar.gz"
-    exit 1
   fi
 }
 
@@ -331,6 +289,30 @@ function wait-for-jobs {
   fi
 }
 
+# Robustly try to create a static ip.
+# $1: The name of the ip to create
+# $2: The name of the region to create the ip in.
+function create-static-ip {
+  detect-project
+  local attempt=0
+  local REGION="$2"
+  while true; do
+    if ! gcloud compute addresses create "$1" \
+      --project "${PROJECT}" \
+      --region "${REGION}" -q > /dev/null; then
+      if (( attempt > 4 )); then
+        echo -e "${color_red}Failed to create static ip $1 ${color_norm}" >&2
+        exit 2
+      fi
+      attempt=$(($attempt+1)) 
+      echo -e "${color_yellow}Attempt $attempt failed to create static ip $1. Retrying.${color_norm}" >&2
+      sleep $(($attempt * 5))
+    else
+      break
+    fi
+  done
+}
+
 # Robustly try to create a firewall rule.
 # $1: The name of firewall rule.
 # $2: IP ranges.
@@ -345,12 +327,13 @@ function create-firewall-rule {
       --source-ranges "$2" \
       --target-tags "$3" \
       --allow tcp,udp,icmp,esp,ah,sctp; then
-        if (( attempt > 5 )); then
-          echo -e "${color_red}Failed to create firewall rule $1 ${color_norm}"
-          exit 2
-        fi
-        echo -e "${color_yellow}Attempt $(($attempt+1)) failed to create firewall rule $1. Retrying.${color_norm}"
-        attempt=$(($attempt+1))
+      if (( attempt > 4 )); then
+        echo -e "${color_red}Failed to create firewall rule $1 ${color_norm}" >&2
+        exit 2
+      fi
+      echo -e "${color_yellow}Attempt $(($attempt+1)) failed to create firewall rule $1. Retrying.${color_norm}" >&2
+      attempt=$(($attempt+1))
+      sleep $(($attempt * 5))
     else
         break
     fi
@@ -368,6 +351,7 @@ function get-template-name-from-version {
 # $2: The scopes flag.
 # $3: The minion start script metadata from file.
 # $4: The kube-env metadata.
+# $5 and others: Additional user defined metadata.
 function create-node-template {
   detect-project
   local template_name="$1"
@@ -403,13 +387,14 @@ function create-node-template {
       ${preemptible_minions} \
       $2 \
       --can-ip-forward \
-      --metadata-from-file "$3","$4" >&2; then
+      --metadata-from-file $(echo ${@:3} | tr ' ' ',') >&2; then
         if (( attempt > 5 )); then
           echo -e "${color_red}Failed to create instance template $template_name ${color_norm}" >&2
           exit 2
         fi
         echo -e "${color_yellow}Attempt ${attempt} failed to create instance template $template_name. Retrying.${color_norm}" >&2
         attempt=$(($attempt+1))
+        sleep $(($attempt * 5))
     else
         break
     fi
@@ -431,11 +416,12 @@ function add-instance-metadata {
       --zone "${ZONE}" \
       --metadata "${kvs[@]}"; then
         if (( attempt > 5 )); then
-          echo -e "${color_red}Failed to add instance metadata in ${instance} ${color_norm}"
+          echo -e "${color_red}Failed to add instance metadata in ${instance} ${color_norm}" >&2
           exit 2
         fi
-        echo -e "${color_yellow}Attempt $(($attempt+1)) failed to add metadata in ${instance}. Retrying.${color_norm}"
+        echo -e "${color_yellow}Attempt $(($attempt+1)) failed to add metadata in ${instance}. Retrying.${color_norm}" >&2
         attempt=$(($attempt+1))
+        sleep $((5 * $attempt))
     else
         break
     fi
@@ -458,11 +444,12 @@ function add-instance-metadata-from-file {
       --zone "${ZONE}" \
       --metadata-from-file "$(join_csv ${kvs[@]})"; then
         if (( attempt > 5 )); then
-          echo -e "${color_red}Failed to add instance metadata in ${instance} ${color_norm}"
+          echo -e "${color_red}Failed to add instance metadata in ${instance} ${color_norm}" >&2
           exit 2
         fi
-        echo -e "${color_yellow}Attempt $(($attempt+1)) failed to add metadata in ${instance}. Retrying.${color_norm}"
+        echo -e "${color_yellow}Attempt $(($attempt+1)) failed to add metadata in ${instance}. Retrying.${color_norm}" >&2
         attempt=$(($attempt+1))
+        sleep $(($attempt * 5))
     else
         break
     fi
@@ -541,7 +528,7 @@ function create-certs {
     ./easyrsa build-client-full kubecfg nopass > /dev/null 2>&1) || {
     # If there was an error in the subshell, just die.
     # TODO(roberthbailey): add better error handling here
-    echo "=== Failed to generate certificates: Aborting ==="
+    echo "=== Failed to generate certificates: Aborting ===" >&2
     exit 2
   }
   CERT_DIR="${KUBE_TEMP}/easy-rsa-master/easyrsa3"
@@ -565,8 +552,8 @@ function kube-up {
   ensure-temp-dir
   detect-project
 
-  gen-kube-basicauth
-  gen-kube-bearertoken
+  load-or-gen-kube-basicauth
+  load-or-gen-kube-bearertoken
 
   # Make sure we have the tar files staged on Google Storage
   find-release-tars
@@ -652,7 +639,8 @@ function kube-up {
   # so extract the region name, which is the same as the zone but with the final
   # dash and characters trailing the dash removed.
   local REGION=${ZONE%-*}
-  MASTER_RESERVED_IP=$(gcloud compute addresses create "${MASTER_NAME}-ip" \
+  create-static-ip "${MASTER_NAME}-ip" "${REGION}"
+  MASTER_RESERVED_IP=$(gcloud compute addresses describe "${MASTER_NAME}-ip" \
     --project "${PROJECT}" \
     --region "${REGION}" -q --format yaml | awk '/^address:/ { print $2 }')
 
@@ -721,27 +709,31 @@ function kube-up {
         --min-num-replicas "${AUTOSCALER_MIN_NODES}" --max-num-replicas "${AUTOSCALER_MAX_NODES}" ${METRICS} || true
   fi
 
-  echo "Waiting for cluster initialization."
+  echo "Waiting up to ${KUBE_CLUSTER_INITIALIZATION_TIMEOUT} seconds for cluster initialization."
   echo
   echo "  This will continually check to see if the API for kubernetes is reachable."
-  echo "  This might loop forever if there was some uncaught error during start"
-  echo "  up."
+  echo "  This may time out if there was some uncaught error during start up."
   echo
 
   # curl in mavericks is borked.
   secure=""
-  if which sw_vers > /dev/null; then
+  if which sw_vers >& /dev/null; then
     if [[ $(sw_vers | grep ProductVersion | awk '{print $2}') = "10.9."* ]]; then
       secure="--insecure"
     fi
   fi
 
-
+  local start_time=$(date +%s)
   until curl --cacert "${CERT_DIR}/pki/ca.crt" \
           -H "Authorization: Bearer ${KUBE_BEARER_TOKEN}" \
           ${secure} \
           --max-time 5 --fail --output /dev/null --silent \
           "https://${KUBE_MASTER_IP}/api/v1/pods"; do
+      local elapsed=$(($(date +%s) - ${start_time}))
+      if [[ ${elapsed} -gt ${KUBE_CLUSTER_INITIALIZATION_TIMEOUT} ]]; then
+          echo -e "${color_red}Cluster failed to initialize within ${KUBE_CLUSTER_INITIALIZATION_TIMEOUT} seconds.${color_norm}" >&2
+          exit 2
+      fi
       printf "."
       sleep 2
   done
@@ -1239,4 +1231,156 @@ function restart-apiserver {
 # Perform preparations required to run e2e tests
 function prepare-e2e() {
   detect-project
+}
+
+# Builds the RUNTIME_CONFIG var from other feature enable options
+function build-runtime-config() {
+  if [[ "${ENABLE_DEPLOYMENTS}" == "true" ]]; then
+      if [[ -z "${RUNTIME_CONFIG}" ]]; then
+          RUNTIME_CONFIG="extensions/v1beta1/deployments=true"
+      else
+          if echo "${RUNTIME_CONFIG}" | grep -q -v "extensions/v1beta1/deployments=true"; then
+            RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/deployments=true"
+          fi
+      fi
+  fi
+  if [[ "${ENABLE_DAEMONSETS}" == "true" ]]; then
+      if [[ -z "${RUNTIME_CONFIG}" ]]; then
+          RUNTIME_CONFIG="extensions/v1beta1/daemonsets=true"
+      else
+          if echo "${RUNTIME_CONFIG}" | grep -q -v "extensions/v1beta1/daemonsets=true"; then
+            RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/daemonsets=true"
+          fi
+      fi
+  fi
+}
+
+# $1: if 'true', we're building a master yaml, else a node
+function build-kube-env {
+  local master=$1
+  local file=$2
+
+  build-runtime-config
+
+  rm -f ${file}
+  cat >$file <<EOF
+ENV_TIMESTAMP: $(yaml-quote $(date -u +%Y-%m-%dT%T%z))
+INSTANCE_PREFIX: $(yaml-quote ${INSTANCE_PREFIX})
+NODE_INSTANCE_PREFIX: $(yaml-quote ${NODE_INSTANCE_PREFIX})
+CLUSTER_IP_RANGE: $(yaml-quote ${CLUSTER_IP_RANGE:-10.244.0.0/16})
+SERVER_BINARY_TAR_URL: $(yaml-quote ${SERVER_BINARY_TAR_URL})
+SERVER_BINARY_TAR_HASH: $(yaml-quote ${SERVER_BINARY_TAR_HASH})
+SALT_TAR_URL: $(yaml-quote ${SALT_TAR_URL})
+SALT_TAR_HASH: $(yaml-quote ${SALT_TAR_HASH})
+SERVICE_CLUSTER_IP_RANGE: $(yaml-quote ${SERVICE_CLUSTER_IP_RANGE})
+KUBERNETES_MASTER_NAME: $(yaml-quote ${MASTER_NAME})
+ALLOCATE_NODE_CIDRS: $(yaml-quote ${ALLOCATE_NODE_CIDRS:-false})
+ENABLE_CLUSTER_MONITORING: $(yaml-quote ${ENABLE_CLUSTER_MONITORING:-none})
+ENABLE_L7_LOADBALANCING: $(yaml-quote ${ENABLE_L7_LOADBALANCING:-none})
+ENABLE_CLUSTER_LOGGING: $(yaml-quote ${ENABLE_CLUSTER_LOGGING:-false})
+ENABLE_CLUSTER_UI: $(yaml-quote ${ENABLE_CLUSTER_UI:-false})
+ENABLE_NODE_LOGGING: $(yaml-quote ${ENABLE_NODE_LOGGING:-false})
+LOGGING_DESTINATION: $(yaml-quote ${LOGGING_DESTINATION:-})
+ELASTICSEARCH_LOGGING_REPLICAS: $(yaml-quote ${ELASTICSEARCH_LOGGING_REPLICAS:-})
+ENABLE_CLUSTER_DNS: $(yaml-quote ${ENABLE_CLUSTER_DNS:-false})
+ENABLE_CLUSTER_REGISTRY: $(yaml-quote ${ENABLE_CLUSTER_REGISTRY:-false})
+CLUSTER_REGISTRY_DISK: $(yaml-quote ${CLUSTER_REGISTRY_DISK})
+CLUSTER_REGISTRY_DISK_SIZE: $(yaml-quote ${CLUSTER_REGISTRY_DISK_SIZE})
+DNS_REPLICAS: $(yaml-quote ${DNS_REPLICAS:-})
+DNS_SERVER_IP: $(yaml-quote ${DNS_SERVER_IP:-})
+DNS_DOMAIN: $(yaml-quote ${DNS_DOMAIN:-})
+KUBELET_TOKEN: $(yaml-quote ${KUBELET_TOKEN:-})
+KUBE_PROXY_TOKEN: $(yaml-quote ${KUBE_PROXY_TOKEN:-})
+ADMISSION_CONTROL: $(yaml-quote ${ADMISSION_CONTROL:-})
+MASTER_IP_RANGE: $(yaml-quote ${MASTER_IP_RANGE})
+RUNTIME_CONFIG: $(yaml-quote ${RUNTIME_CONFIG})
+CA_CERT: $(yaml-quote ${CA_CERT_BASE64:-})
+KUBELET_CERT: $(yaml-quote ${KUBELET_CERT_BASE64:-})
+KUBELET_KEY: $(yaml-quote ${KUBELET_KEY_BASE64:-})
+NETWORK_PROVIDER: $(yaml-quote ${NETWORK_PROVIDER:-})
+OPENCONTRAIL_TAG: $(yaml-quote ${OPENCONTRAIL_TAG:-})
+OPENCONTRAIL_KUBERNETES_TAG: $(yaml-quote ${OPENCONTRAIL_KUBERNETES_TAG:-})
+OPENCONTRAIL_PUBLIC_SUBNET: $(yaml-quote ${OPENCONTRAIL_PUBLIC_SUBNET:-})
+E2E_STORAGE_TEST_ENVIRONMENT: $(yaml-quote ${E2E_STORAGE_TEST_ENVIRONMENT:-})
+KUBELET_PORT: $(yaml-quote ${KUBELET_PORT:-})
+EOF
+  if [ -n "${KUBE_APISERVER_REQUEST_TIMEOUT:-}" ]; then
+    cat >>$file <<EOF
+KUBE_APISERVER_REQUEST_TIMEOUT: $(yaml-quote ${KUBE_APISERVER_REQUEST_TIMEOUT})
+EOF
+  fi
+  if [ -n "${TERMINATED_POD_GC_THRESHOLD:-}" ]; then
+    cat >>$file <<EOF
+TERMINATED_POD_GC_THRESHOLD: $(yaml-quote ${TERMINATED_POD_GC_THRESHOLD})
+EOF
+  fi
+  if [ -n "${TEST_CLUSTER:-}" ]; then
+    cat >>$file <<EOF
+TEST_CLUSTER: $(yaml-quote ${TEST_CLUSTER})
+EOF
+  fi
+  if [[ "${master}" == "true" ]]; then
+    # Master-only env vars.
+    cat >>$file <<EOF
+KUBERNETES_MASTER: $(yaml-quote "true")
+KUBE_USER: $(yaml-quote ${KUBE_USER})
+KUBE_PASSWORD: $(yaml-quote ${KUBE_PASSWORD})
+KUBE_BEARER_TOKEN: $(yaml-quote ${KUBE_BEARER_TOKEN})
+MASTER_CERT: $(yaml-quote ${MASTER_CERT_BASE64:-})
+MASTER_KEY: $(yaml-quote ${MASTER_KEY_BASE64:-})
+KUBECFG_CERT: $(yaml-quote ${KUBECFG_CERT_BASE64:-})
+KUBECFG_KEY: $(yaml-quote ${KUBECFG_KEY_BASE64:-})
+KUBELET_APISERVER: $(yaml-quote ${KUBELET_APISERVER:-})
+ENABLE_MANIFEST_URL: $(yaml-quote ${ENABLE_MANIFEST_URL:-false})
+MANIFEST_URL: $(yaml-quote ${MANIFEST_URL:-})
+MANIFEST_URL_HEADER: $(yaml-quote ${MANIFEST_URL_HEADER:-})
+NUM_MINIONS: $(yaml-quote ${NUM_MINIONS})
+EOF
+    if [ -n "${APISERVER_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+APISERVER_TEST_ARGS: $(yaml-quote ${APISERVER_TEST_ARGS})
+EOF
+    fi
+    if [ -n "${KUBELET_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+KUBELET_TEST_ARGS: $(yaml-quote ${KUBELET_TEST_ARGS})
+EOF
+    fi
+    if [ -n "${CONTROLLER_MANAGER_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+CONTROLLER_MANAGER_TEST_ARGS: $(yaml-quote ${CONTROLLER_MANAGER_TEST_ARGS})
+EOF
+    fi
+    if [ -n "${SCHEDULER_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+SCHEDULER_TEST_ARGS: $(yaml-quote ${SCHEDULER_TEST_ARGS})
+EOF
+    fi
+  else
+    # Node-only env vars.
+    cat >>$file <<EOF
+KUBERNETES_MASTER: $(yaml-quote "false")
+ZONE: $(yaml-quote ${ZONE})
+EXTRA_DOCKER_OPTS: $(yaml-quote ${EXTRA_DOCKER_OPTS:-})
+EOF
+    if [ -n "${KUBELET_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+KUBELET_TEST_ARGS: $(yaml-quote ${KUBELET_TEST_ARGS})
+EOF
+    fi
+    if [ -n "${KUBEPROXY_TEST_ARGS:-}" ]; then
+      cat >>$file <<EOF
+KUBEPROXY_TEST_ARGS: $(yaml-quote ${KUBEPROXY_TEST_ARGS})
+EOF
+    fi
+  fi
+  if [[ "${OS_DISTRIBUTION}" == "coreos" ]]; then
+    # CoreOS-only env vars. TODO(yifan): Make them available on other distros.
+    cat >>$file <<EOF
+KUBERNETES_CONTAINER_RUNTIME: $(yaml-quote ${CONTAINER_RUNTIME:-docker})
+RKT_VERSION: $(yaml-quote ${RKT_VERSION:-})
+RKT_PATH: $(yaml-quote ${RKT_PATH:-})
+KUBERNETES_CONFIGURE_CBR0: $(yaml-quote ${KUBERNETES_CONFIGURE_CBR0:-true})
+EOF
+  fi
 }

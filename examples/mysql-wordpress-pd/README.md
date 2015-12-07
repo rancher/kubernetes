@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/examples/mysql-wordpress-pd/README.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/examples/mysql-wordpress-pd/README.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -109,7 +109,7 @@ spec:
     - resources:
         limits :
           cpu: 0.5
-      image: mysql
+      image: mysql:5.6
       name: mysql
       env:
         - name: MYSQL_ROOT_PASSWORD

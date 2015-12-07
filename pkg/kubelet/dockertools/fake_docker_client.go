@@ -66,6 +66,42 @@ func (f *FakeDockerClient) ClearCalls() {
 	f.Removed = []string{}
 }
 
+func (f *FakeDockerClient) SetFakeContainers(containers []*docker.Container) {
+	f.Lock()
+	defer f.Unlock()
+	// Reset the lists and the map.
+	f.ContainerMap = map[string]*docker.Container{}
+	f.ContainerList = []docker.APIContainers{}
+	f.ExitedContainerList = []docker.APIContainers{}
+
+	for i := range containers {
+		c := containers[i]
+		if c.Config == nil {
+			c.Config = &docker.Config{}
+		}
+		if c.HostConfig == nil {
+			c.HostConfig = &docker.HostConfig{}
+		}
+		f.ContainerMap[c.ID] = c
+		apiContainer := docker.APIContainers{
+			Names: []string{c.Name},
+			ID:    c.ID,
+		}
+		if c.State.Running {
+			f.ContainerList = append(f.ContainerList, apiContainer)
+		} else {
+			f.ExitedContainerList = append(f.ExitedContainerList, apiContainer)
+		}
+	}
+}
+
+func (f *FakeDockerClient) SetFakeRunningContainers(containers []*docker.Container) {
+	for _, c := range containers {
+		c.State.Running = true
+	}
+	f.SetFakeContainers(containers)
+}
+
 func (f *FakeDockerClient) AssertCalls(calls []string) (err error) {
 	f.Lock()
 	defer f.Unlock()
@@ -146,10 +182,14 @@ func (f *FakeDockerClient) ListContainers(options docker.ListContainersOptions) 
 	defer f.Unlock()
 	f.called = append(f.called, "list")
 	err := f.popError("list")
+	containerList := append([]docker.APIContainers{}, f.ContainerList...)
 	if options.All {
-		return append(f.ContainerList, f.ExitedContainerList...), err
+		// Althought the container is not sorted, but the container with the same name should be in order,
+		// that is enough for us now.
+		// TODO (random-liu) Is a fully sorted array needed?
+		containerList = append(containerList, f.ExitedContainerList...)
 	}
-	return append([]docker.APIContainers{}, f.ContainerList...), err
+	return containerList, err
 }
 
 // InspectContainer is a test-spy implementation of DockerInterface.InspectContainer.
@@ -204,7 +244,10 @@ func (f *FakeDockerClient) CreateContainer(c docker.CreateContainerOptions) (*do
 	// This is not a very good fake. We'll just add this container's name to the list.
 	// Docker likes to add a '/', so copy that behavior.
 	name := "/" + c.Name
-	f.ContainerList = append(f.ContainerList, docker.APIContainers{ID: name, Names: []string{name}, Image: c.Config.Image})
+	// The newest container should be in front, because we assume so in GetPodStatus()
+	f.ContainerList = append([]docker.APIContainers{
+		{ID: name, Names: []string{name}, Image: c.Config.Image, Labels: c.Config.Labels},
+	}, f.ContainerList...)
 	container := docker.Container{ID: name, Name: name, Config: c.Config}
 	if f.ContainerMap != nil {
 		containerCopy := container
@@ -266,7 +309,8 @@ func (f *FakeDockerClient) StopContainer(id string, timeout uint) error {
 	var newList []docker.APIContainers
 	for _, container := range f.ContainerList {
 		if container.ID == id {
-			f.ExitedContainerList = append(f.ExitedContainerList, container)
+			// The newest exited container should be in front. Because we assume so in GetPodStatus()
+			f.ExitedContainerList = append([]docker.APIContainers{container}, f.ExitedContainerList...)
 			continue
 		}
 		newList = append(newList, container)

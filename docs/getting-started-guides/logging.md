@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/logging.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/logging.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -123,10 +123,10 @@ root       479  0.0  0.0   4348   812 ?        S    00:05   0:00 sleep 1
 root       480  0.0  0.0  15572  2212 ?        R    00:05   0:00 ps aux
 ```
 
-What happens if for any reason the image in this pod is killed off and then restarted by Kubernetes? Will we still see the log lines from the previous invocation of the container followed by the log lines for the started container? Or will we lose the log lines from the original container’s execution and only see the log lines for the new container? Let’s find out. First let’s stop the currently running counter.
+What happens if for any reason the image in this pod is killed off and then restarted by Kubernetes? Will we still see the log lines from the previous invocation of the container followed by the log lines for the started container? Or will we lose the log lines from the original container’s execution and only see the log lines for the new container? Let’s find out. First let’s delete the currently running counter.
 
 ```console
-$ kubectl stop pod counter
+$ kubectl delete pod counter
 pods/counter
 ```
 
@@ -169,7 +169,7 @@ metadata:
 spec:
   containers:
   - name: fluentd-cloud-logging
-    image: gcr.io/google_containers/fluentd-gcp:1.13
+    image: gcr.io/google_containers/fluentd-gcp:1.14
     resources:
       limits:
         cpu: 100m
@@ -245,7 +245,7 @@ $ cat 21\:00\:00_21\:59\:59_S0.json | jq '.structPayload.log'
 ...
 ```
 
-This page has touched briefly on the underlying mechanisms that support gathering cluster level logs on a Kubernetes deployment. The approach here only works for gathering the standard output and standard error output of the processes running in the pod’s containers. To gather other logs that are stored in files one can use a sidecar container to gather the required files as described at the page [Collecting log files within containers with Fluentd](http://releases.k8s.io/release-1.0/contrib/logging/fluentd-sidecar-gcp/README.md) and sending them to the Google Cloud Logging service.
+This page has touched briefly on the underlying mechanisms that support gathering cluster level logs on a Kubernetes deployment. The approach here only works for gathering the standard output and standard error output of the processes running in the pod’s containers. To gather other logs that are stored in files one can use a sidecar container to gather the required files as described at the page [Collecting log files within containers with Fluentd](http://releases.k8s.io/release-1.1/contrib/logging/fluentd-sidecar-gcp/README.md) and sending them to the Google Cloud Logging service.
 
 Some of the material in this section also appears in the blog article [Cluster Level Logging with Kubernetes](http://blog.kubernetes.io/2015/06/cluster-level-logging-with-kubernetes.html).
 

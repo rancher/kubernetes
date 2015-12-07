@@ -21,12 +21,14 @@ import (
 	"strings"
 	"time"
 
-	fuzz "github.com/google/gofuzz"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/util"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
 
@@ -39,7 +41,7 @@ const (
 // timeout is how long we'll wait for the termination to be successful
 // gracePeriod is time given to an API object for it to delete itself cleanly (e.g. pod shutdown)
 type Reaper interface {
-	Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error)
+	Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error
 }
 
 type NoSuchReaperError struct {
@@ -101,7 +103,7 @@ type objInterface interface {
 
 // getOverlappingControllers finds rcs that this controller overlaps, as well as rcs overlapping this controller.
 func getOverlappingControllers(c client.ReplicationControllerInterface, rc *api.ReplicationController) ([]api.ReplicationController, error) {
-	rcs, err := c.List(labels.Everything())
+	rcs, err := c.List(labels.Everything(), fields.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("error getting replication controllers: %v", err)
 	}
@@ -116,15 +118,15 @@ func getOverlappingControllers(c client.ReplicationControllerInterface, rc *api.
 	return matchingRCs, nil
 }
 
-func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
+func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error {
 	rc := reaper.ReplicationControllers(namespace)
 	scaler, err := ScalerFor("ReplicationController", *reaper)
 	if err != nil {
-		return "", err
+		return err
 	}
 	ctrl, err := rc.Get(name)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if timeout == 0 {
 		timeout = Timeout + time.Duration(10*ctrl.Spec.Replicas)*time.Second
@@ -152,7 +154,7 @@ func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout 
 
 	overlappingCtrls, err := getOverlappingControllers(rc, ctrl)
 	if err != nil {
-		return "", fmt.Errorf("error getting replication controllers: %v", err)
+		return fmt.Errorf("error getting replication controllers: %v", err)
 	}
 	exactMatchRCs := []api.ReplicationController{}
 	overlapRCs := []string{}
@@ -164,7 +166,7 @@ func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout 
 		}
 	}
 	if len(overlapRCs) > 0 {
-		return "", fmt.Errorf(
+		return fmt.Errorf(
 			"Detected overlapping controllers for rc %v: %v, please manage deletion individually with --cascade=false.",
 			ctrl.Name, strings.Join(overlapRCs, ","))
 	}
@@ -173,75 +175,62 @@ func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout 
 		retry := NewRetryParams(reaper.pollInterval, reaper.timeout)
 		waitForReplicas := NewRetryParams(reaper.pollInterval, timeout)
 		if err = scaler.Scale(namespace, name, 0, nil, retry, waitForReplicas); err != nil {
-			return "", err
+			return err
 		}
 	}
 	if err := rc.Delete(name); err != nil {
-		return "", err
+		return err
 	}
-	return fmt.Sprintf("%s stopped", name), nil
+	return nil
 }
 
-func (reaper *DaemonSetReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
-	ds, err := reaper.Experimental().DaemonSets(namespace).Get(name)
+func (reaper *DaemonSetReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error {
+	ds, err := reaper.Extensions().DaemonSets(namespace).Get(name)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	// Update the daemon set to select for a non-existent NodeName.
-	// The daemon set controller will then kill all the daemon pods corresponding to daemon set.
-	nodes, err := reaper.Nodes().List(labels.Everything(), fields.Everything())
-	if err != nil {
-		return "", err
+	// We set the nodeSelector to a random label. This label is nearly guaranteed
+	// to not be set on any node so the DameonSetController will start deleting
+	// daemon pods. Once it's done deleting the daemon pods, it's safe to delete
+	// the DaemonSet.
+	ds.Spec.Template.Spec.NodeSelector = map[string]string{
+		string(util.NewUUID()): string(util.NewUUID()),
 	}
-	var fuzzer = fuzz.New()
-	var nameExists bool
-
-	var nodeName string
-	fuzzer.Fuzz(&nodeName)
-	nameExists = false
-	for _, node := range nodes.Items {
-		nameExists = nameExists || node.Name == nodeName
-	}
-	if nameExists {
-		// Probability of reaching here is extremely low, most likely indicates a programming bug/library error.
-		return "", fmt.Errorf("Name collision generating an unused node name. Please retry this operation.")
-	}
-
-	ds.Spec.Template.Spec.NodeName = nodeName
 	// force update to avoid version conflict
 	ds.ResourceVersion = ""
 
-	if ds, err = reaper.Experimental().DaemonSets(namespace).Update(ds); err != nil {
-		return "", err
+	if ds, err = reaper.Extensions().DaemonSets(namespace).Update(ds); err != nil {
+		return err
 	}
 
 	// Wait for the daemon set controller to kill all the daemon pods.
 	if err := wait.Poll(reaper.pollInterval, reaper.timeout, func() (bool, error) {
-		updatedDS, err := reaper.Experimental().DaemonSets(namespace).Get(name)
+		updatedDS, err := reaper.Extensions().DaemonSets(namespace).Get(name)
 		if err != nil {
 			return false, nil
 		}
 		return updatedDS.Status.CurrentNumberScheduled+updatedDS.Status.NumberMisscheduled == 0, nil
 	}); err != nil {
-		return "", err
+		return err
 	}
 
-	if err := reaper.Experimental().DaemonSets(namespace).Delete(name); err != nil {
-		return "", err
+	if err := reaper.Extensions().DaemonSets(namespace).Delete(name); err != nil {
+		return err
 	}
-	return fmt.Sprintf("%s stopped", name), nil
+	return nil
 }
 
-func (reaper *JobReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
-	jobs := reaper.Experimental().Jobs(namespace)
+func (reaper *JobReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error {
+	jobs := reaper.Extensions().Jobs(namespace)
+	pods := reaper.Pods(namespace)
 	scaler, err := ScalerFor("Job", *reaper)
 	if err != nil {
-		return "", err
+		return err
 	}
 	job, err := jobs.Get(name)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if timeout == 0 {
 		// we will never have more active pods than job.Spec.Parallelism
@@ -253,35 +242,51 @@ func (reaper *JobReaper) Stop(namespace, name string, timeout time.Duration, gra
 	retry := NewRetryParams(reaper.pollInterval, reaper.timeout)
 	waitForJobs := NewRetryParams(reaper.pollInterval, timeout)
 	if err = scaler.Scale(namespace, name, 0, nil, retry, waitForJobs); err != nil {
-		return "", err
+		return err
 	}
+	// at this point only dead pods are left, that should be removed
+	selector, _ := extensions.PodSelectorAsSelector(job.Spec.Selector)
+	podList, err := pods.List(selector, fields.Everything())
+	if err != nil {
+		return err
+	}
+	errList := []error{}
+	for _, pod := range podList.Items {
+		if err := pods.Delete(pod.Name, gracePeriod); err != nil {
+			errList = append(errList, err)
+		}
+	}
+	if len(errList) > 0 {
+		return utilerrors.NewAggregate(errList)
+	}
+	// once we have all the pods removed we can safely remove the job itself
 	if err := jobs.Delete(name, gracePeriod); err != nil {
-		return "", err
+		return err
 	}
-	return fmt.Sprintf("%s stopped", name), nil
+	return nil
 }
 
-func (reaper *PodReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
+func (reaper *PodReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error {
 	pods := reaper.Pods(namespace)
 	_, err := pods.Get(name)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := pods.Delete(name, gracePeriod); err != nil {
-		return "", err
+		return err
 	}
 
-	return fmt.Sprintf("%s stopped", name), nil
+	return nil
 }
 
-func (reaper *ServiceReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
+func (reaper *ServiceReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) error {
 	services := reaper.Services(namespace)
 	_, err := services.Get(name)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := services.Delete(name); err != nil {
-		return "", err
+		return err
 	}
-	return fmt.Sprintf("%s stopped", name), nil
+	return nil
 }

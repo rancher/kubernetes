@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/static-pods.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/static-pods.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -31,9 +31,9 @@ Documentation for other releases can be found at
 
 <!-- END MUNGE: UNVERSIONED_WARNING -->
 
-# Static pods (deprecated)
+# Static pods
 
-**Static pods are to be deprecated and can be removed in any future Kubernetes release!**
+**If you are running clustered Kubernetes and are using static pods to run a pod on every node, you should probably be using a [DaemonSet](daemons.md)!**
 
 *Static pod* are managed directly by kubelet daemon on a specific node, without API server observing it. It does not have associated any replication controller, kubelet daemon itself watches it and restarts it when it crashes. There is no health check though. Static pods are always bound to one kubelet daemon and always run on the same node with it.
 

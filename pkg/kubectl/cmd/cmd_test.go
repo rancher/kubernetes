@@ -40,6 +40,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
 type internalType struct {
@@ -76,27 +77,33 @@ func versionErrIfFalse(b bool) error {
 	return versionErr
 }
 
+var validVersion = testapi.Default.Version()
+var internalGV = unversioned.GroupVersion{Group: "apitest", Version: ""}
+var unlikelyGV = unversioned.GroupVersion{Group: "apitest", Version: "unlikelyversion"}
+var validVersionGV = unversioned.GroupVersion{Group: "apitest", Version: validVersion}
+
 func newExternalScheme() (*runtime.Scheme, meta.RESTMapper, runtime.Codec) {
 	scheme := runtime.NewScheme()
-	scheme.AddKnownTypeWithName("", "Type", &internalType{})
-	scheme.AddKnownTypeWithName("unlikelyversion", "Type", &externalType{})
+	scheme.AddKnownTypeWithName(internalGV.Version, "Type", &internalType{})
+	scheme.AddKnownTypeWithName(unlikelyGV.String(), "Type", &externalType{})
 	//This tests that kubectl will not confuse the external scheme with the internal scheme, even when they accidentally have versions of the same name.
-	scheme.AddKnownTypeWithName(testapi.Default.Version(), "Type", &ExternalType2{})
+	scheme.AddKnownTypeWithName(validVersionGV.String(), "Type", &ExternalType2{})
 
-	codec := runtime.CodecFor(scheme, "unlikelyversion")
-	validVersion := testapi.Default.Version()
-	mapper := meta.NewDefaultRESTMapper("apitest", []string{"unlikelyversion", validVersion}, func(version string) (*meta.VersionInterfaces, error) {
+	codec := runtime.CodecFor(scheme, unlikelyGV.String())
+	mapper := meta.NewDefaultRESTMapper([]unversioned.GroupVersion{unlikelyGV, validVersionGV}, func(version string) (*meta.VersionInterfaces, error) {
 		return &meta.VersionInterfaces{
 			Codec:            runtime.CodecFor(scheme, version),
 			ObjectConvertor:  scheme,
 			MetadataAccessor: meta.NewAccessor(),
-		}, versionErrIfFalse(version == validVersion || version == "unlikelyversion")
+		}, versionErrIfFalse(version == validVersionGV.String() || version == unlikelyGV.String())
 	})
-	for _, version := range []string{"unlikelyversion", validVersion} {
-		for kind := range scheme.KnownTypes(version) {
+	for _, gv := range []unversioned.GroupVersion{unlikelyGV, validVersionGV} {
+		for kind := range scheme.KnownTypes(gv.String()) {
+			gvk := gv.WithKind(kind)
+
 			mixedCase := false
 			scope := meta.RESTScopeNamespace
-			mapper.Add(scope, kind, version, mixedCase)
+			mapper.Add(gvk, scope, mixedCase)
 		}
 	}
 
@@ -228,19 +235,36 @@ func NewAPIFactory() (*cmdutil.Factory, *testFactory, runtime.Codec) {
 		ClientConfig: func() (*client.Config, error) {
 			return t.ClientConfig, t.Err
 		},
-		CanBeExposed: func(kind string) error {
-			if kind != "ReplicationController" && kind != "Service" && kind != "Pod" {
-				return fmt.Errorf("invalid resource provided: %v, only a replication controller, service or pod is accepted", kind)
-			}
-			return nil
-		},
 		Generator: func(name string) (kubectl.Generator, bool) {
 			generator, ok := generators[name]
 			return generator, ok
 		},
+		LogsForObject: func(object, options runtime.Object) (*client.Request, error) {
+			fakeClient := t.Client.(*fake.RESTClient)
+			c := client.NewOrDie(t.ClientConfig)
+			c.Client = fakeClient.Client
+
+			switch t := object.(type) {
+			case *api.Pod:
+				opts, ok := options.(*api.PodLogOptions)
+				if !ok {
+					return nil, errors.New("provided options object is not a PodLogOptions")
+				}
+				return c.Pods(t.Namespace).GetLogs(t.Name, opts), nil
+			default:
+				_, kind, err := api.Scheme.ObjectVersionAndKind(object)
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("cannot get the logs from %s", kind)
+			}
+		},
 	}
 	rf := cmdutil.NewFactory(nil)
 	f.PodSelectorForObject = rf.PodSelectorForObject
+	f.PortsForObject = rf.PortsForObject
+	f.LabelsForObject = rf.LabelsForObject
+	f.CanBeExposed = rf.CanBeExposed
 	return f, t, testapi.Default.Codec()
 }
 
@@ -654,12 +678,12 @@ func (testServiceGenerator) Generate(genericParams map[string]interface{}) (runt
 	}
 	if found && len(targetPort) > 0 {
 		if portNum, err := strconv.Atoi(targetPort); err != nil {
-			service.Spec.Ports[0].TargetPort = util.NewIntOrStringFromString(targetPort)
+			service.Spec.Ports[0].TargetPort = intstr.FromString(targetPort)
 		} else {
-			service.Spec.Ports[0].TargetPort = util.NewIntOrStringFromInt(portNum)
+			service.Spec.Ports[0].TargetPort = intstr.FromInt(portNum)
 		}
 	} else {
-		service.Spec.Ports[0].TargetPort = util.NewIntOrStringFromInt(port)
+		service.Spec.Ports[0].TargetPort = intstr.FromInt(port)
 	}
 	if params["create-external-load-balancer"] == "true" {
 		service.Spec.Type = api.ServiceTypeLoadBalancer

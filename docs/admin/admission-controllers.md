@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/admission-controllers.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/admission-controllers.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -49,6 +49,7 @@ Documentation for other releases can be found at
     - [SecurityContextDeny](#securitycontextdeny)
     - [ResourceQuota](#resourcequota)
     - [LimitRanger](#limitranger)
+    - [InitialResources (experimental)](#initialresources-experimental)
     - [NamespaceExists (deprecated)](#namespaceexists-deprecated)
     - [NamespaceAutoProvision (deprecated)](#namespaceautoprovision-deprecated)
     - [NamespaceLifecycle](#namespacelifecycle)
@@ -142,6 +143,15 @@ applies a 0.1 CPU requirement to all Pods in the `default` namespace.
 
 See the [limitRange design doc](../design/admission_control_limit_range.md) and the [example of Limit Range](limitrange/) for more details.
 
+### InitialResources (experimental)
+
+This plug-in observes pod creation requests. If a container omits compute resource requests and limits,
+then the plug-in auto-populates a compute resource request based on historical usage of containers running the same image.
+If there is not enough data to make a decision the Request is left unchanged.
+When the plug-in sets a compute resource request, it annotates the pod with information on what compute resources it auto-populated.
+
+See the [InitialResouces proposal](../proposals/initial-resources.md) for more details.
+
 ### NamespaceExists (deprecated)
 
 This plug-in will observe all incoming requests that attempt to create a resource in a Kubernetes `Namespace`
@@ -172,7 +182,7 @@ Yes.
 For Kubernetes 1.0, we strongly recommend running the following set of admission control plug-ins (order matters):
 
 ```
---admission-control=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,DenyEscalatingExec,ResourceQuota
+--admission-control=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota
 ```
 
 

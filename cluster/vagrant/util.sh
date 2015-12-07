@@ -34,18 +34,6 @@ function detect-minions {
 # Verify prereqs on host machine  Also sets exports USING_KUBE_SCRIPTS=true so
 # that our Vagrantfile doesn't error out.
 function verify-prereqs {
-  if [[ "${ENABLE_EXPERIMENTAL_API}" == "true" ]]; then
-    if [[ -z "${RUNTIME_CONFIG}" ]]; then
-      RUNTIME_CONFIG="experimental/v1alpha1"
-    else
-      # TODO: add checking if RUNTIME_CONFIG contains "experimental/v1=false" and appending "experimental/v1=true" if not.
-      if echo "${RUNTIME_CONFIG}" | grep -q -v "experimental/v1alpha1=true"; then
-        echo "Experimental API should be turned on, but is not turned on in RUNTIME_CONFIG!"
-        exit 1
-      fi
-    fi
-  fi
-  
   for x in vagrant; do
     if ! which "$x" >/dev/null; then
       echo "Can't find $x in PATH, please fix and retry."
@@ -170,6 +158,7 @@ function create-provision-scripts {
     echo "OPENCONTRAIL_TAG='${OPENCONTRAIL_TAG:-}'"
     echo "OPENCONTRAIL_KUBERNETES_TAG='${OPENCONTRAIL_KUBERNETES_TAG:-}'"
     echo "OPENCONTRAIL_PUBLIC_SUBNET='${OPENCONTRAIL_PUBLIC_SUBNET:-}'"
+    echo "E2E_STORAGE_TEST_ENVIRONMENT='${E2E_STORAGE_TEST_ENVIRONMENT:-}'"
     awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network-master.sh"
     awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-master.sh"
   ) > "${KUBE_TEMP}/master-start.sh"
@@ -195,6 +184,7 @@ function create-provision-scripts {
       echo "KUBELET_TOKEN='${KUBELET_TOKEN:-}'"
       echo "KUBE_PROXY_TOKEN='${KUBE_PROXY_TOKEN:-}'"
       echo "MASTER_EXTRA_SANS='${MASTER_EXTRA_SANS:-}'"
+      echo "E2E_STORAGE_TEST_ENVIRONMENT='${E2E_STORAGE_TEST_ENVIRONMENT:-}'"
       awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network-minion.sh"
       awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-minion.sh"
     ) > "${KUBE_TEMP}/minion-start-${i}.sh"
@@ -295,11 +285,11 @@ function verify-cluster {
 
 # Instantiate a kubernetes cluster
 function kube-up {
-  gen-kube-basicauth
+  load-or-gen-kube-basicauth
   get-tokens
   create-provision-scripts
 
-  vagrant up
+  vagrant up --no-parallel
 
   export KUBE_CERT="/tmp/$RANDOM-kubecfg.crt"
   export KUBE_KEY="/tmp/$RANDOM-kubecfg.key"

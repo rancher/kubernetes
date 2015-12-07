@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/proposals/volumes.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/proposals/volumes.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -272,7 +272,7 @@ type PodSecurityContext struct {
     // FSGroup is a supplemental group that all containers in a pod run under.  This group will own
     // volumes that the Kubelet manages ownership for.  If this is not specified, the Kubelet will
     // not set the group ownership of any volumes.
-    FSGroup *int64 `json:"supplementalGroup"`
+    FSGroup *int64 `json:"fsGroup,omitempty"`
 }
 ```
 
@@ -285,7 +285,7 @@ type PodSecurityContext struct {
     // FSGroup is a supplemental group that all containers in a pod run under.  This group will own
     // volumes that the Kubelet manages ownership for.  If this is not specified, the Kubelet will
     // not set the group ownership of any volumes.
-    FSGroup *int64 `json:"supplementalGroup"`
+    FSGroup *int64 `json:"fsGroup,omitempty"`
 }
 ```
 
@@ -455,7 +455,7 @@ metadata:
   name: test-pod
 spec:
   securityContext:
-    supplementalGroup: 1001
+    fsGroup: 1001
   containers:
   - name: a
     securityContext:
@@ -487,7 +487,7 @@ metadata:
   name: test-pod
 spec:
   securityContext:
-    supplementalGroup: 1001
+    fsGroup: 1001
   containers:
   - name: a
     securityContext:

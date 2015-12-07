@@ -53,6 +53,7 @@ func TestDecodeSinglePod(t *testing.T) {
 				TerminationMessagePath: "/dev/termination-log",
 				SecurityContext:        securitycontext.ValidSecurityContextWithContainerDefaults(),
 			}},
+			SecurityContext: &api.PodSecurityContext{},
 		},
 	}
 	json, err := testapi.Default.Codec().Encode(pod)
@@ -70,8 +71,8 @@ func TestDecodeSinglePod(t *testing.T) {
 		t.Errorf("expected:\n%#v\ngot:\n%#v\n%s", pod, podOut, string(json))
 	}
 
-	for _, version := range registered.GroupVersionsForGroup("") {
-		externalPod, err := testapi.Default.Converter().ConvertToVersion(pod, version)
+	for _, gv := range registered.GroupVersionsForGroup("") {
+		externalPod, err := testapi.Default.Converter().ConvertToVersion(pod, gv.String())
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -115,6 +116,7 @@ func TestDecodePodList(t *testing.T) {
 				TerminationMessagePath: "/dev/termination-log",
 				SecurityContext:        securitycontext.ValidSecurityContextWithContainerDefaults(),
 			}},
+			SecurityContext: &api.PodSecurityContext{},
 		},
 	}
 	podList := &api.PodList{
@@ -135,8 +137,8 @@ func TestDecodePodList(t *testing.T) {
 		t.Errorf("expected:\n%#v\ngot:\n%#v\n%s", podList, &podListOut, string(json))
 	}
 
-	for _, version := range registered.GroupVersionsForGroup("") {
-		externalPodList, err := testapi.Default.Converter().ConvertToVersion(podList, version)
+	for _, gv := range registered.GroupVersionsForGroup("") {
+		externalPodList, err := testapi.Default.Converter().ConvertToVersion(podList, gv.String())
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

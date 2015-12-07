@@ -29,7 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	controllerFramework "k8s.io/kubernetes/pkg/controller/framework"
+	controllerframework "k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -63,33 +63,58 @@ func (a latencySlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a latencySlice) Less(i, j int) bool { return a[i].Latency < a[j].Latency }
 
 func extractLatencyMetrics(latencies []podLatencyData) LatencyMetric {
-	perc50 := latencies[len(latencies)/2].Latency
-	perc90 := latencies[(len(latencies)*9)/10].Latency
-	perc99 := latencies[(len(latencies)*99)/100].Latency
+	length := len(latencies)
+	perc50 := latencies[int(math.Ceil(float64(length*50)/100))-1].Latency
+	perc90 := latencies[int(math.Ceil(float64(length*90)/100))-1].Latency
+	perc99 := latencies[int(math.Ceil(float64(length*99)/100))-1].Latency
 	return LatencyMetric{Perc50: perc50, Perc90: perc90, Perc99: perc99}
 }
 
-func printLatencies(latencies []podLatencyData, header string) {
-	metrics := extractLatencyMetrics(latencies)
-	Logf("10%% %s: %v", header, latencies[(len(latencies)*9)/10:len(latencies)])
-	Logf("perc50: %v, perc90: %v, perc99: %v", metrics.Perc50, metrics.Perc90, metrics.Perc99)
-}
-
-// This test suite can take a long time to run, so by default it is added to
-// the ginkgo.skip list (see driver.go).
+// This test suite can take a long time to run, and can affect or be affected by other tests.
+// So by default it is added to the ginkgo.skip list (see driver.go).
 // To run this suite you must explicitly ask for it by setting the
 // -t/--test flag or ginkgo.focus flag.
-var _ = Describe("Density", func() {
+var _ = Describe("Density [Skipped]", func() {
 	var c *client.Client
 	var nodeCount int
 	var RCName string
 	var additionalPodsPrefix string
 	var ns string
 	var uuid string
-	framework := Framework{BaseName: "density", NamespaceDeletionTimeout: time.Hour}
+
+	// Gathers data prior to framework namespace teardown
+	AfterEach(func() {
+		// Remove any remaining pods from this test if the
+		// replication controller still exists and the replica count
+		// isn't 0.  This means the controller wasn't cleaned up
+		// during the test so clean it up here. We want to do it separately
+		// to not cause a timeout on Namespace removal.
+		rc, err := c.ReplicationControllers(ns).Get(RCName)
+		if err == nil && rc.Spec.Replicas != 0 {
+			By("Cleaning up the replication controller")
+			err := DeleteRC(c, ns, RCName)
+			expectNoError(err)
+		}
+
+		By("Removing additional pods if any")
+		for i := 1; i <= nodeCount; i++ {
+			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
+			c.Pods(ns).Delete(name, nil)
+		}
+
+		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
+
+		// Verify latency metrics
+		highLatencyRequests, err := HighLatencyRequests(c)
+		expectNoError(err)
+		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
+	})
+
+	framework := NewFramework("density")
+	framework.NamespaceDeletionTimeout = time.Hour
+	framework.GatherKubeSystemResourceUsageData = testContext.GatherKubeSystemResourceUsageData
 
 	BeforeEach(func() {
-		framework.beforeEach()
 		c = framework.Client
 		ns = framework.Namespace.Name
 		var err error
@@ -113,47 +138,20 @@ var _ = Describe("Density", func() {
 
 		Logf("Listing nodes for easy debugging:\n")
 		for _, node := range nodes.Items {
+			var internalIP, externalIP string
 			for _, address := range node.Status.Addresses {
 				if address.Type == api.NodeInternalIP {
-					Logf("Name: %v IP: %v", node.ObjectMeta.Name, address.Address)
+					internalIP = address.Address
+				}
+				if address.Type == api.NodeExternalIP {
+					externalIP = address.Address
 				}
 			}
+			Logf("Name: %v, clusterIP: %v, externalIP: %v", node.ObjectMeta.Name, internalIP, externalIP)
 		}
 	})
 
-	AfterEach(func() {
-		// Remove any remaining pods from this test if the
-		// replication controller still exists and the replica count
-		// isn't 0.  This means the controller wasn't cleaned up
-		// during the test so clean it up here. We want to do it separately
-		// to not cause a timeout on Namespace removal.
-		rc, err := c.ReplicationControllers(ns).Get(RCName)
-		if err == nil && rc.Spec.Replicas != 0 {
-			By("Cleaning up the replication controller")
-			err := DeleteRC(c, ns, RCName)
-			expectNoError(err)
-		}
-
-		By("Removing additional pods if any")
-		for i := 1; i <= nodeCount; i++ {
-			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-			c.Pods(ns).Delete(name, nil)
-		}
-
-		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
-
-		// Verify latency metrics
-		highLatencyRequests, err := HighLatencyRequests(c, 3*time.Second)
-		expectNoError(err)
-		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
-
-		framework.afterEach()
-	})
-
-	// Tests with "Skipped" substring in their name will be skipped when running
-	// e2e test suite without --ginkgo.focus & --ginkgo.skip flags.
 	type Density struct {
-		skip bool
 		// Controls if e2e latency tests should be run (they are slow)
 		runLatencyTest bool
 		podsPerNode    int
@@ -162,25 +160,19 @@ var _ = Describe("Density", func() {
 	}
 
 	densityTests := []Density{
-		// This test should not be run in a regular jenkins run, because it is not isolated enough
-		// (metrics from other tests affects this one).
-		// TODO: Reenable once we can measure latency only from a single test.
 		// TODO: Expose runLatencyTest as ginkgo flag.
-		{podsPerNode: 3, skip: true, runLatencyTest: false, interval: 10 * time.Second},
-		{podsPerNode: 30, skip: true, runLatencyTest: true, interval: 10 * time.Second},
+		{podsPerNode: 3, runLatencyTest: false, interval: 10 * time.Second},
+		{podsPerNode: 30, runLatencyTest: true, interval: 10 * time.Second},
 		// More than 30 pods per node is outside our v1.0 goals.
 		// We might want to enable those tests in the future.
-		{podsPerNode: 50, skip: true, runLatencyTest: false, interval: 10 * time.Second},
-		{podsPerNode: 100, skip: true, runLatencyTest: false, interval: 1 * time.Second},
+		{podsPerNode: 50, runLatencyTest: false, interval: 10 * time.Second},
+		{podsPerNode: 100, runLatencyTest: false, interval: 1 * time.Second},
 	}
 
 	for _, testArg := range densityTests {
 		name := fmt.Sprintf("should allow starting %d pods per node", testArg.podsPerNode)
 		if testArg.podsPerNode == 30 {
-			name = "[Performance suite] " + name
-		}
-		if testArg.skip {
-			name = "[Skipped] " + name
+			name = "[Performance] " + name
 		}
 		itArg := testArg
 		It(name, func() {
@@ -190,7 +182,7 @@ var _ = Describe("Density", func() {
 			expectNoError(err)
 			defer fileHndl.Close()
 			config := RCConfig{Client: c,
-				Image:                "gcr.io/google_containers/pause:go",
+				Image:                "gcr.io/google_containers/pause:2.0",
 				Name:                 RCName,
 				Namespace:            ns,
 				PollInterval:         itArg.interval,
@@ -201,18 +193,18 @@ var _ = Describe("Density", func() {
 
 			// Create a listener for events.
 			events := make([](*api.Event), 0)
-			_, controller := controllerFramework.NewInformer(
+			_, controller := controllerframework.NewInformer(
 				&cache.ListWatch{
 					ListFunc: func() (runtime.Object, error) {
 						return c.Events(ns).List(labels.Everything(), fields.Everything())
 					},
-					WatchFunc: func(rv string) (watch.Interface, error) {
-						return c.Events(ns).Watch(labels.Everything(), fields.Everything(), rv)
+					WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+						return c.Events(ns).Watch(labels.Everything(), fields.Everything(), options)
 					},
 				},
 				&api.Event{},
 				0,
-				controllerFramework.ResourceEventHandlerFuncs{
+				controllerframework.ResourceEventHandlerFuncs{
 					AddFunc: func(obj interface{}) {
 						events = append(events, obj.(*api.Event))
 					},
@@ -284,18 +276,18 @@ var _ = Describe("Density", func() {
 				}
 
 				additionalPodsPrefix = "density-latency-pod-" + string(util.NewUUID())
-				_, controller := controllerFramework.NewInformer(
+				_, controller := controllerframework.NewInformer(
 					&cache.ListWatch{
 						ListFunc: func() (runtime.Object, error) {
 							return c.Pods(ns).List(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything())
 						},
-						WatchFunc: func(rv string) (watch.Interface, error) {
-							return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), rv)
+						WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+							return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), options)
 						},
 					},
 					&api.Pod{},
 					0,
-					controllerFramework.ResourceEventHandlerFuncs{
+					controllerframework.ResourceEventHandlerFuncs{
 						AddFunc: func(obj interface{}) {
 							p, ok := obj.(*api.Pod)
 							Expect(ok).To(Equal(true))
@@ -320,13 +312,16 @@ var _ = Describe("Density", func() {
 				}
 				for i := 1; i <= nodeCount; i++ {
 					name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-					go createRunningPod(&wg, c, name, ns, "gcr.io/google_containers/pause:go", podLabels)
+					go createRunningPod(&wg, c, name, ns, "gcr.io/google_containers/pause:2.0", podLabels)
 					time.Sleep(200 * time.Millisecond)
 				}
 				wg.Wait()
 
 				Logf("Waiting for all Pods begin observed by the watch...")
-				for start := time.Now(); len(watchTimes) < nodeCount && time.Since(start) < timeout; time.Sleep(10 * time.Second) {
+				for start := time.Now(); len(watchTimes) < nodeCount; time.Sleep(10 * time.Second) {
+					if time.Since(start) < timeout {
+						Failf("Timeout reached waiting for all Pods being observed by the watch.")
+					}
 				}
 				close(stopCh)
 
@@ -384,9 +379,7 @@ var _ = Describe("Density", func() {
 
 				// Test whether e2e pod startup time is acceptable.
 				podStartupLatency := PodStartupLatency{Latency: extractLatencyMetrics(e2eLag)}
-				// TODO: Switch it to 5 seconds once we are sure our tests are passing.
-				podStartupThreshold := 8 * time.Second
-				expectNoError(VerifyPodStartupLatency(podStartupLatency, podStartupThreshold))
+				expectNoError(VerifyPodStartupLatency(podStartupLatency))
 
 				// Log suspicious latency metrics/docker errors from all nodes that had slow startup times
 				for _, l := range startupLag {

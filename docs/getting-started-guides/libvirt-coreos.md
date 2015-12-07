@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/libvirt-coreos.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/libvirt-coreos.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -144,6 +144,7 @@ In order to fix that issue, you have several possibilities:
   * writable by your user;
   * accessible by the qemu user.
 * Grant the qemu user access to the storage pool.
+* Edit `/etc/libvirt/qemu.conf` to run under that user, that have access to the storage pool (not recommended for production usage).
 
 On Arch:
 

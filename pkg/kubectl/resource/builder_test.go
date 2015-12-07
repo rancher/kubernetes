@@ -32,10 +32,11 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/fake"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/watch"
 	watchjson "k8s.io/kubernetes/pkg/watch/json"
 )
@@ -63,7 +64,7 @@ func fakeClientWith(testName string, t *testing.T, data map[string]string) Clien
 	return ClientMapperFunc(func(*meta.RESTMapping) (RESTClient, error) {
 		return &fake.RESTClient{
 			Codec: testapi.Default.Codec(),
-			Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 				p := req.URL.Path
 				q := req.URL.RawQuery
 				if len(q) != 0 {
@@ -83,7 +84,6 @@ func fakeClientWith(testName string, t *testing.T, data map[string]string) Clien
 }
 
 func testData() (*api.PodList, *api.ServiceList) {
-	grace := int64(30)
 	pods := &api.PodList{
 		ListMeta: unversioned.ListMeta{
 			ResourceVersion: "15",
@@ -91,19 +91,11 @@ func testData() (*api.PodList, *api.ServiceList) {
 		Items: []api.Pod{
 			{
 				ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "test", ResourceVersion: "10"},
-				Spec: api.PodSpec{
-					RestartPolicy:                 api.RestartPolicyAlways,
-					DNSPolicy:                     api.DNSClusterFirst,
-					TerminationGracePeriodSeconds: &grace,
-				},
+				Spec:       apitesting.DeepEqualSafePodSpec(),
 			},
 			{
 				ObjectMeta: api.ObjectMeta{Name: "bar", Namespace: "test", ResourceVersion: "11"},
-				Spec: api.PodSpec{
-					RestartPolicy:                 api.RestartPolicyAlways,
-					DNSPolicy:                     api.DNSClusterFirst,
-					TerminationGracePeriodSeconds: &grace,
-				},
+				Spec:       apitesting.DeepEqualSafePodSpec(),
 			},
 		},
 	}
@@ -478,7 +470,7 @@ func TestResourceByNameWithoutRequireObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mapping.Kind != "Pod" || mapping.Resource != "pods" {
+	if mapping.GroupVersionKind.Kind != "Pod" || mapping.Resource != "pods" {
 		t.Errorf("unexpected resource mapping: %#v", mapping)
 	}
 }
@@ -512,7 +504,7 @@ func TestResourceByNameAndEmptySelector(t *testing.T) {
 
 func TestSelector(t *testing.T) {
 	pods, svc := testData()
-	labelKey := api.LabelSelectorQueryParam(testapi.Default.Version())
+	labelKey := unversioned.LabelSelectorQueryParam(testapi.Default.Version())
 	b := NewBuilder(testapi.Default.RESTMapper(), api.Scheme, fakeClientWith("", t, map[string]string{
 		"/namespaces/test/pods?" + labelKey + "=a%3Db":     runtime.EncodeOrDie(testapi.Default.Codec(), pods),
 		"/namespaces/test/services?" + labelKey + "=a%3Db": runtime.EncodeOrDie(testapi.Default.Codec(), svc),
@@ -731,7 +723,7 @@ func TestContinueOnErrorVisitor(t *testing.T) {
 	if count != 3 {
 		t.Fatalf("did not visit all infos: %d", count)
 	}
-	agg, ok := err.(errors.Aggregate)
+	agg, ok := err.(utilerrors.Aggregate)
 	if !ok {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -807,7 +799,7 @@ func TestSingularRootScopedObject(t *testing.T) {
 
 func TestListObject(t *testing.T) {
 	pods, _ := testData()
-	labelKey := api.LabelSelectorQueryParam(testapi.Default.Version())
+	labelKey := unversioned.LabelSelectorQueryParam(testapi.Default.Version())
 	b := NewBuilder(testapi.Default.RESTMapper(), api.Scheme, fakeClientWith("", t, map[string]string{
 		"/namespaces/test/pods?" + labelKey + "=a%3Db": runtime.EncodeOrDie(testapi.Default.Codec(), pods),
 	})).
@@ -840,7 +832,7 @@ func TestListObject(t *testing.T) {
 
 func TestListObjectWithDifferentVersions(t *testing.T) {
 	pods, svc := testData()
-	labelKey := api.LabelSelectorQueryParam(testapi.Default.Version())
+	labelKey := unversioned.LabelSelectorQueryParam(testapi.Default.Version())
 	obj, err := NewBuilder(testapi.Default.RESTMapper(), api.Scheme, fakeClientWith("", t, map[string]string{
 		"/namespaces/test/pods?" + labelKey + "=a%3Db":     runtime.EncodeOrDie(testapi.Default.Codec(), pods),
 		"/namespaces/test/services?" + labelKey + "=a%3Db": runtime.EncodeOrDie(testapi.Default.Codec(), svc),
@@ -970,7 +962,7 @@ func TestReceiveMultipleErrors(t *testing.T) {
 		t.Fatalf("unexpected response: %v %t %#v", err, singular, test.Infos)
 	}
 
-	errs, ok := err.(errors.Aggregate)
+	errs, ok := err.(utilerrors.Aggregate)
 	if !ok {
 		t.Fatalf("unexpected error: %v", reflect.TypeOf(err))
 	}

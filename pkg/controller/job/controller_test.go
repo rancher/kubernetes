@@ -23,28 +23,30 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/rand"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
 var alwaysReady = func() bool { return true }
 
-func newJob(parallelism, completions int) *experimental.Job {
-	return &experimental.Job{
+func newJob(parallelism, completions int) *extensions.Job {
+	return &extensions.Job{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foobar",
 			Namespace: api.NamespaceDefault,
 		},
-		Spec: experimental.JobSpec{
+		Spec: extensions.JobSpec{
 			Parallelism: &parallelism,
 			Completions: &completions,
-			Selector:    map[string]string{"foo": "bar"},
-			Template: &api.PodTemplateSpec{
+			Selector: &extensions.PodSelector{
+				MatchLabels: map[string]string{"foo": "bar"},
+			},
+			Template: api.PodTemplateSpec{
 				ObjectMeta: api.ObjectMeta{
 					Labels: map[string]string{
 						"foo": "bar",
@@ -60,7 +62,7 @@ func newJob(parallelism, completions int) *experimental.Job {
 	}
 }
 
-func getKey(job *experimental.Job, t *testing.T) string {
+func getKey(job *extensions.Job, t *testing.T) string {
 	if key, err := controller.KeyFunc(job); err != nil {
 		t.Errorf("Unexpected error getting key for job %v: %v", job.Name, err)
 		return ""
@@ -70,13 +72,13 @@ func getKey(job *experimental.Job, t *testing.T) string {
 }
 
 // create count pods with the given phase for the given job
-func newPodList(count int, status api.PodPhase, job *experimental.Job) []api.Pod {
+func newPodList(count int, status api.PodPhase, job *extensions.Job) []api.Pod {
 	pods := []api.Pod{}
 	for i := 0; i < count; i++ {
 		newPod := api.Pod{
 			ObjectMeta: api.ObjectMeta{
-				Name:      fmt.Sprintf("pod-%v", unversioned.Now().UnixNano()),
-				Labels:    job.Spec.Selector,
+				Name:      fmt.Sprintf("pod-%v", rand.String(10)),
+				Labels:    job.Spec.Selector.MatchLabels,
 				Namespace: job.Namespace,
 			},
 			Status: api.PodStatus{Phase: status},
@@ -95,16 +97,16 @@ func TestControllerSyncJob(t *testing.T) {
 		// pod setup
 		podControllerError error
 		activePods         int
-		successfulPods     int
-		unsuccessfulPods   int
+		succeededPods      int
+		failedPods         int
 
 		// expectations
-		expectedCreations    int
-		expectedDeletions    int
-		expectedActive       int
-		expectedSuccessful   int
-		expectedUnsuccessful int
-		expectedComplete     bool
+		expectedCreations int
+		expectedDeletions int
+		expectedActive    int
+		expectedSucceeded int
+		expectedFailed    int
+		expectedComplete  bool
 	}{
 		"job start": {
 			2, 5,
@@ -160,13 +162,13 @@ func TestControllerSyncJob(t *testing.T) {
 
 	for name, tc := range testCases {
 		// job manager setup
-		client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-		manager := NewJobController(client)
+		client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+		manager := NewJobController(client, controller.NoResyncPeriodFunc)
 		fakePodControl := controller.FakePodControl{Err: tc.podControllerError}
 		manager.podControl = &fakePodControl
 		manager.podStoreSynced = alwaysReady
-		var actual *experimental.Job
-		manager.updateHandler = func(job *experimental.Job) error {
+		var actual *extensions.Job
+		manager.updateHandler = func(job *extensions.Job) error {
 			actual = job
 			return nil
 		}
@@ -177,10 +179,10 @@ func TestControllerSyncJob(t *testing.T) {
 		for _, pod := range newPodList(tc.activePods, api.PodRunning, job) {
 			manager.podStore.Store.Add(&pod)
 		}
-		for _, pod := range newPodList(tc.successfulPods, api.PodSucceeded, job) {
+		for _, pod := range newPodList(tc.succeededPods, api.PodSucceeded, job) {
 			manager.podStore.Store.Add(&pod)
 		}
-		for _, pod := range newPodList(tc.unsuccessfulPods, api.PodFailed, job) {
+		for _, pod := range newPodList(tc.failedPods, api.PodFailed, job) {
 			manager.podStore.Store.Add(&pod)
 		}
 
@@ -201,17 +203,17 @@ func TestControllerSyncJob(t *testing.T) {
 		if actual.Status.Active != tc.expectedActive {
 			t.Errorf("%s: unexpected number of active pods.  Expected %d, saw %d\n", name, tc.expectedActive, actual.Status.Active)
 		}
-		if actual.Status.Successful != tc.expectedSuccessful {
-			t.Errorf("%s: unexpected number of successful pods.  Expected %d, saw %d\n", name, tc.expectedSuccessful, actual.Status.Successful)
+		if actual.Status.Succeeded != tc.expectedSucceeded {
+			t.Errorf("%s: unexpected number of succeeded pods.  Expected %d, saw %d\n", name, tc.expectedSucceeded, actual.Status.Succeeded)
 		}
-		if actual.Status.Unsuccessful != tc.expectedUnsuccessful {
-			t.Errorf("%s: unexpected number of unsuccessful pods.  Expected %d, saw %d\n", name, tc.expectedUnsuccessful, actual.Status.Unsuccessful)
+		if actual.Status.Failed != tc.expectedFailed {
+			t.Errorf("%s: unexpected number of failed pods.  Expected %d, saw %d\n", name, tc.expectedFailed, actual.Status.Failed)
 		}
 		// validate conditions
 		if tc.expectedComplete {
 			completed := false
 			for _, v := range actual.Status.Conditions {
-				if v.Type == experimental.JobComplete && v.Status == api.ConditionTrue {
+				if v.Type == extensions.JobComplete && v.Status == api.ConditionTrue {
 					completed = true
 					break
 				}
@@ -224,12 +226,12 @@ func TestControllerSyncJob(t *testing.T) {
 }
 
 func TestSyncJobDeleted(t *testing.T) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-	manager := NewJobController(client)
+	client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	fakePodControl := controller.FakePodControl{}
 	manager.podControl = &fakePodControl
 	manager.podStoreSynced = alwaysReady
-	manager.updateHandler = func(job *experimental.Job) error { return nil }
+	manager.updateHandler = func(job *extensions.Job) error { return nil }
 	job := newJob(2, 2)
 	err := manager.syncJob(getKey(job, t))
 	if err != nil {
@@ -244,12 +246,12 @@ func TestSyncJobDeleted(t *testing.T) {
 }
 
 func TestSyncJobUpdateRequeue(t *testing.T) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-	manager := NewJobController(client)
+	client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	fakePodControl := controller.FakePodControl{}
 	manager.podControl = &fakePodControl
 	manager.podStoreSynced = alwaysReady
-	manager.updateHandler = func(job *experimental.Job) error { return fmt.Errorf("Fake error") }
+	manager.updateHandler = func(job *extensions.Job) error { return fmt.Errorf("Fake error") }
 	job := newJob(2, 2)
 	manager.jobStore.Store.Add(job)
 	err := manager.syncJob(getKey(job, t))
@@ -265,18 +267,18 @@ func TestSyncJobUpdateRequeue(t *testing.T) {
 }
 
 func TestJobPodLookup(t *testing.T) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-	manager := NewJobController(client)
+	client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	manager.podStoreSynced = alwaysReady
 	testCases := []struct {
-		job *experimental.Job
+		job *extensions.Job
 		pod *api.Pod
 
 		expectedName string
 	}{
 		// pods without labels don't match any job
 		{
-			job: &experimental.Job{
+			job: &extensions.Job{
 				ObjectMeta: api.ObjectMeta{Name: "basic"},
 			},
 			pod: &api.Pod{
@@ -286,10 +288,12 @@ func TestJobPodLookup(t *testing.T) {
 		},
 		// matching labels, different namespace
 		{
-			job: &experimental.Job{
+			job: &extensions.Job{
 				ObjectMeta: api.ObjectMeta{Name: "foo"},
-				Spec: experimental.JobSpec{
-					Selector: map[string]string{"foo": "bar"},
+				Spec: extensions.JobSpec{
+					Selector: &extensions.PodSelector{
+						MatchLabels: map[string]string{"foo": "bar"},
+					},
 				},
 			},
 			pod: &api.Pod{
@@ -303,10 +307,18 @@ func TestJobPodLookup(t *testing.T) {
 		},
 		// matching ns and labels returns
 		{
-			job: &experimental.Job{
+			job: &extensions.Job{
 				ObjectMeta: api.ObjectMeta{Name: "bar", Namespace: "ns"},
-				Spec: experimental.JobSpec{
-					Selector: map[string]string{"foo": "bar"},
+				Spec: extensions.JobSpec{
+					Selector: &extensions.PodSelector{
+						MatchExpressions: []extensions.PodSelectorRequirement{
+							{
+								Key:      "foo",
+								Operator: extensions.PodSelectorOpIn,
+								Values:   []string{"bar"},
+							},
+						},
+					},
 				},
 			},
 			pod: &api.Pod{
@@ -345,12 +357,12 @@ func (fe FakeJobExpectations) SatisfiedExpectations(controllerKey string) bool {
 // TestSyncJobExpectations tests that a pod cannot sneak in between counting active pods
 // and checking expectations.
 func TestSyncJobExpectations(t *testing.T) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-	manager := NewJobController(client)
+	client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	fakePodControl := controller.FakePodControl{}
 	manager.podControl = &fakePodControl
 	manager.podStoreSynced = alwaysReady
-	manager.updateHandler = func(job *experimental.Job) error { return nil }
+	manager.updateHandler = func(job *extensions.Job) error { return nil }
 
 	job := newJob(2, 2)
 	manager.jobStore.Store.Add(job)
@@ -383,10 +395,10 @@ func TestWatchJobs(t *testing.T) {
 	client := testclient.NewSimpleFake()
 	fakeWatch := watch.NewFake()
 	client.PrependWatchReactor("*", testclient.DefaultWatchReactor(fakeWatch, nil))
-	manager := NewJobController(client)
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	manager.podStoreSynced = alwaysReady
 
-	var testJob experimental.Job
+	var testJob extensions.Job
 	received := make(chan struct{})
 
 	// The update sent through the fakeWatcher should make its way into the workqueue,
@@ -397,7 +409,7 @@ func TestWatchJobs(t *testing.T) {
 		if !exists || err != nil {
 			t.Errorf("Expected to find job under key %v", key)
 		}
-		job := *obj.(*experimental.Job)
+		job := *obj.(*extensions.Job)
 		if !api.Semantic.DeepDerivative(job, testJob) {
 			t.Errorf("Expected %#v, but got %#v", testJob, job)
 		}
@@ -419,10 +431,10 @@ func TestWatchJobs(t *testing.T) {
 }
 
 func TestIsJobFinished(t *testing.T) {
-	job := &experimental.Job{
-		Status: experimental.JobStatus{
-			Conditions: []experimental.JobCondition{{
-				Type:   experimental.JobComplete,
+	job := &extensions.Job{
+		Status: extensions.JobStatus{
+			Conditions: []extensions.JobCondition{{
+				Type:   extensions.JobComplete,
 				Status: api.ConditionTrue,
 			}},
 		},
@@ -447,7 +459,7 @@ func TestWatchPods(t *testing.T) {
 	client := testclient.NewSimpleFake()
 	fakeWatch := watch.NewFake()
 	client.PrependWatchReactor("*", testclient.DefaultWatchReactor(fakeWatch, nil))
-	manager := NewJobController(client)
+	manager := NewJobController(client, controller.NoResyncPeriodFunc)
 	manager.podStoreSynced = alwaysReady
 
 	// Put one job and one pod into the store
@@ -462,7 +474,7 @@ func TestWatchPods(t *testing.T) {
 		if !exists || err != nil {
 			t.Errorf("Expected to find job under key %v", key)
 		}
-		job := obj.(*experimental.Job)
+		job := obj.(*extensions.Job)
 		if !api.Semantic.DeepDerivative(job, testJob) {
 			t.Errorf("\nExpected %#v,\nbut got %#v", testJob, job)
 		}

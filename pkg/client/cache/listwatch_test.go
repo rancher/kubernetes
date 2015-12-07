@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/util"
@@ -54,7 +55,7 @@ func buildLocation(resourcePath string, query url.Values) string {
 }
 
 func TestListWatchesCanList(t *testing.T) {
-	fieldSelectorQueryParamName := api.FieldSelectorQueryParam(testapi.Default.Version())
+	fieldSelectorQueryParamName := unversioned.FieldSelectorQueryParam(testapi.Default.Version())
 	table := []struct {
 		location      string
 		resource      string
@@ -95,7 +96,7 @@ func TestListWatchesCanList(t *testing.T) {
 		}
 		server := httptest.NewServer(&handler)
 		defer server.Close()
-		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+		client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 		lw := NewListWatchFromClient(client, item.resource, item.namespace, item.fieldSelector)
 		// This test merely tests that the correct request is made.
 		lw.List()
@@ -104,7 +105,7 @@ func TestListWatchesCanList(t *testing.T) {
 }
 
 func TestListWatchesCanWatch(t *testing.T) {
-	fieldSelectorQueryParamName := api.FieldSelectorQueryParam(testapi.Default.Version())
+	fieldSelectorQueryParamName := unversioned.FieldSelectorQueryParam(testapi.Default.Version())
 	table := []struct {
 		rv            string
 		location      string
@@ -161,10 +162,10 @@ func TestListWatchesCanWatch(t *testing.T) {
 		}
 		server := httptest.NewServer(&handler)
 		defer server.Close()
-		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+		client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 		lw := NewListWatchFromClient(client, item.resource, item.namespace, item.fieldSelector)
 		// This test merely tests that the correct request is made.
-		lw.Watch(item.rv)
+		lw.Watch(api.ListOptions{ResourceVersion: item.rv})
 		handler.ValidateRequest(t, item.location, "GET", nil)
 	}
 }

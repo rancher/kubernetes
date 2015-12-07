@@ -27,8 +27,11 @@ import (
 
 	"k8s.io/kubernetes/pkg/registry/controller"
 	"k8s.io/kubernetes/pkg/registry/controller/etcd"
+	"k8s.io/kubernetes/pkg/registry/generic"
 
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+
+	extvalidation "k8s.io/kubernetes/pkg/apis/extensions/validation"
 )
 
 // Container includes dummy storage for RC pods and experimental storage for Scale.
@@ -37,8 +40,10 @@ type ContainerStorage struct {
 	Scale                 *ScaleREST
 }
 
-func NewStorage(s storage.Interface) ContainerStorage {
-	rcRegistry := controller.NewRegistry(etcd.NewREST(s))
+func NewStorage(s storage.Interface, storageDecorator generic.StorageDecorator) ContainerStorage {
+	// scale does not set status, only updates spec so we ignore the status
+	controllerREST, _ := etcd.NewREST(s, storageDecorator)
+	rcRegistry := controller.NewRegistry(controllerREST)
 
 	return ContainerStorage{
 		ReplicationController: &RcREST{},
@@ -55,7 +60,7 @@ var _ = rest.Patcher(&ScaleREST{})
 
 // New creates a new Scale object
 func (r *ScaleREST) New() runtime.Object {
-	return &experimental.Scale{}
+	return &extensions.Scale{}
 }
 
 func (r *ScaleREST) Get(ctx api.Context, name string) (runtime.Object, error) {
@@ -63,16 +68,16 @@ func (r *ScaleREST) Get(ctx api.Context, name string) (runtime.Object, error) {
 	if err != nil {
 		return nil, errors.NewNotFound("scale", name)
 	}
-	return &experimental.Scale{
+	return &extensions.Scale{
 		ObjectMeta: api.ObjectMeta{
 			Name:              name,
 			Namespace:         rc.Namespace,
 			CreationTimestamp: rc.CreationTimestamp,
 		},
-		Spec: experimental.ScaleSpec{
+		Spec: extensions.ScaleSpec{
 			Replicas: rc.Spec.Replicas,
 		},
-		Status: experimental.ScaleStatus{
+		Status: extensions.ScaleStatus{
 			Replicas: rc.Status.Replicas,
 			Selector: rc.Spec.Selector,
 		},
@@ -83,10 +88,15 @@ func (r *ScaleREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object,
 	if obj == nil {
 		return nil, false, errors.NewBadRequest(fmt.Sprintf("nil update passed to Scale"))
 	}
-	scale, ok := obj.(*experimental.Scale)
+	scale, ok := obj.(*extensions.Scale)
 	if !ok {
 		return nil, false, errors.NewBadRequest(fmt.Sprintf("wrong object passed to Scale update: %v", obj))
 	}
+
+	if errs := extvalidation.ValidateScale(scale); len(errs) > 0 {
+		return nil, false, errors.NewInvalid("scale", scale.Name, errs)
+	}
+
 	rc, err := (*r.registry).GetController(ctx, scale.Name)
 	if err != nil {
 		return nil, false, errors.NewNotFound("scale", scale.Name)
@@ -96,16 +106,16 @@ func (r *ScaleREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object,
 	if err != nil {
 		return nil, false, errors.NewConflict("scale", scale.Name, err)
 	}
-	return &experimental.Scale{
+	return &extensions.Scale{
 		ObjectMeta: api.ObjectMeta{
 			Name:              rc.Name,
 			Namespace:         rc.Namespace,
 			CreationTimestamp: rc.CreationTimestamp,
 		},
-		Spec: experimental.ScaleSpec{
+		Spec: extensions.ScaleSpec{
 			Replicas: rc.Spec.Replicas,
 		},
-		Status: experimental.ScaleStatus{
+		Status: extensions.ScaleStatus{
 			Replicas: rc.Status.Replicas,
 			Selector: rc.Spec.Selector,
 		},
@@ -116,5 +126,5 @@ func (r *ScaleREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object,
 type RcREST struct{}
 
 func (r *RcREST) New() runtime.Object {
-	return &experimental.ReplicationControllerDummy{}
+	return &extensions.ReplicationControllerDummy{}
 }

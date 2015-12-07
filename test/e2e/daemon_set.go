@@ -25,7 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/kubectl"
@@ -48,7 +48,14 @@ const (
 )
 
 var _ = Describe("Daemon set", func() {
-	f := &Framework{BaseName: "daemonsets"}
+	var f *Framework
+
+	AfterEach(func() {
+		err := clearDaemonSetNodeLabels(f.Client)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	f = NewFramework("daemonsets")
 
 	image := "gcr.io/google_containers/serve_hostname:1.1"
 	dsName := "daemon-set"
@@ -57,28 +64,21 @@ var _ = Describe("Daemon set", func() {
 	var c *client.Client
 
 	BeforeEach(func() {
-		f.beforeEach()
 		ns = f.Namespace.Name
 		c = f.Client
 		err := clearDaemonSetNodeLabels(c)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	AfterEach(func() {
-		err := clearDaemonSetNodeLabels(f.Client)
-		Expect(err).NotTo(HaveOccurred())
-		f.afterEach()
-	})
-
 	It("should run and stop simple daemon", func() {
 		label := map[string]string{daemonsetNameLabel: dsName}
 
 		Logf("Creating simple daemon set %s", dsName)
-		_, err := c.DaemonSets(ns).Create(&experimental.DaemonSet{
+		_, err := c.DaemonSets(ns).Create(&extensions.DaemonSet{
 			ObjectMeta: api.ObjectMeta{
 				Name: dsName,
 			},
-			Spec: experimental.DaemonSetSpec{
+			Spec: extensions.DaemonSetSpec{
 				Template: &api.PodTemplateSpec{
 					ObjectMeta: api.ObjectMeta{
 						Labels: label,
@@ -100,7 +100,7 @@ var _ = Describe("Daemon set", func() {
 			Logf("Check that reaper kills all daemon pods for %s", dsName)
 			dsReaper, err := kubectl.ReaperFor("DaemonSet", c)
 			Expect(err).NotTo(HaveOccurred())
-			_, err = dsReaper.Stop(ns, dsName, 0, nil)
+			err = dsReaper.Stop(ns, dsName, 0, nil)
 			Expect(err).NotTo(HaveOccurred())
 			err = wait.Poll(dsRetryPeriod, dsRetryTimeout, checkRunningOnNoNodes(f, label))
 			Expect(err).NotTo(HaveOccurred(), "error waiting for daemon pod to be reaped")
@@ -129,12 +129,12 @@ var _ = Describe("Daemon set", func() {
 		complexLabel := map[string]string{daemonsetNameLabel: dsName}
 		nodeSelector := map[string]string{daemonsetColorLabel: "blue"}
 		Logf("Creating daemon with a node selector %s", dsName)
-		_, err := c.DaemonSets(ns).Create(&experimental.DaemonSet{
+		_, err := c.DaemonSets(ns).Create(&extensions.DaemonSet{
 			ObjectMeta: api.ObjectMeta{
 				Name: dsName,
 			},
-			Spec: experimental.DaemonSetSpec{
-				Selector: complexLabel,
+			Spec: extensions.DaemonSetSpec{
+				Selector: &extensions.PodSelector{MatchLabels: complexLabel},
 				Template: &api.PodTemplateSpec{
 					ObjectMeta: api.ObjectMeta{
 						Labels: complexLabel,

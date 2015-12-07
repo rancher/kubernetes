@@ -165,6 +165,15 @@ type gcePersistentDiskBuilder struct {
 
 var _ volume.Builder = &gcePersistentDiskBuilder{}
 
+func (b *gcePersistentDiskBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    b.readOnly,
+		Managed:                     !b.readOnly,
+		SupportsOwnershipManagement: true,
+		SupportsSELinux:             true,
+	}
+}
+
 // SetUp attaches the disk and bind mounts to the volume path.
 func (b *gcePersistentDiskBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
@@ -228,10 +237,6 @@ func (b *gcePersistentDiskBuilder) SetUpAt(dir string) error {
 	}
 
 	return nil
-}
-
-func (b *gcePersistentDiskBuilder) IsReadOnly() bool {
-	return b.readOnly
 }
 
 func makeGlobalPDName(host volume.VolumeHost, devName string) string {

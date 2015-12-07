@@ -26,7 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/storage"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
+	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 )
 
 // If you need to start an etcd instance by hand, you also need to insert a key
@@ -42,6 +42,13 @@ func NewEtcdClient() *etcd.Client {
 
 func NewEtcdStorage() (storage.Interface, error) {
 	return master.NewEtcdStorage(NewEtcdClient(), latest.GroupOrDie("").InterfacesFor, testapi.Default.Version(), etcdtest.PathPrefix())
+}
+
+func NewExtensionsEtcdStorage(client *etcd.Client) (storage.Interface, error) {
+	if client == nil {
+		client = NewEtcdClient()
+	}
+	return master.NewEtcdStorage(client, latest.GroupOrDie("extensions").InterfacesFor, testapi.Extensions.GroupAndVersion(), etcdtest.PathPrefix())
 }
 
 func RequireEtcd() {

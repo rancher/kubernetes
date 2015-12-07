@@ -18,7 +18,6 @@ package etcd
 
 import (
 	"fmt"
-	"path"
 
 	"k8s.io/kubernetes/pkg/api"
 	apierrors "k8s.io/kubernetes/pkg/api/errors"
@@ -49,16 +48,21 @@ type FinalizeREST struct {
 }
 
 // NewREST returns a RESTStorage object that will work against namespaces.
-func NewREST(s storage.Interface) (*REST, *StatusREST, *FinalizeREST) {
+func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator) (*REST, *StatusREST, *FinalizeREST) {
 	prefix := "/namespaces"
+
+	newListFunc := func() runtime.Object { return &api.NamespaceList{} }
+	storageInterface := storageDecorator(
+		s, 100, &api.Namespace{}, prefix, true, newListFunc)
+
 	store := &etcdgeneric.Etcd{
 		NewFunc:     func() runtime.Object { return &api.Namespace{} },
-		NewListFunc: func() runtime.Object { return &api.NamespaceList{} },
+		NewListFunc: newListFunc,
 		KeyRootFunc: func(ctx api.Context) string {
 			return prefix
 		},
 		KeyFunc: func(ctx api.Context, name string) (string, error) {
-			return path.Join(prefix, name), nil
+			return etcdgeneric.NoNamespaceKeyFunc(ctx, prefix, name)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.Namespace).Name, nil
@@ -72,7 +76,7 @@ func NewREST(s storage.Interface) (*REST, *StatusREST, *FinalizeREST) {
 		UpdateStrategy:      namespace.Strategy,
 		ReturnDeletedObject: true,
 
-		Storage: s,
+		Storage: storageInterface,
 	}
 
 	statusStore := *store

@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
@@ -36,12 +36,15 @@ type REST struct {
 }
 
 // NewREST returns a registry which will store ThirdPartyResourceData in the given helper
-func NewREST(s storage.Interface, group, kind string) *REST {
+func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator, group, kind string) *REST {
 	prefix := "/ThirdPartyResourceData/" + group + "/" + strings.ToLower(kind) + "s"
 
+	// We explicitly do NOT do any decoration here yet.
+	storageInterface := s
+
 	store := &etcdgeneric.Etcd{
-		NewFunc:     func() runtime.Object { return &experimental.ThirdPartyResourceData{} },
-		NewListFunc: func() runtime.Object { return &experimental.ThirdPartyResourceDataList{} },
+		NewFunc:     func() runtime.Object { return &extensions.ThirdPartyResourceData{} },
+		NewListFunc: func() runtime.Object { return &extensions.ThirdPartyResourceDataList{} },
 		KeyRootFunc: func(ctx api.Context) string {
 			return etcdgeneric.NamespaceKeyRootFunc(ctx, prefix)
 		},
@@ -49,7 +52,7 @@ func NewREST(s storage.Interface, group, kind string) *REST {
 			return etcdgeneric.NamespaceKeyFunc(ctx, prefix, id)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
-			return obj.(*experimental.ThirdPartyResourceData).Name, nil
+			return obj.(*extensions.ThirdPartyResourceData).Name, nil
 		},
 		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
 			return thirdpartyresourcedata.Matcher(label, field)
@@ -58,7 +61,7 @@ func NewREST(s storage.Interface, group, kind string) *REST {
 		CreateStrategy: thirdpartyresourcedata.Strategy,
 		UpdateStrategy: thirdpartyresourcedata.Strategy,
 
-		Storage: s,
+		Storage: storageInterface,
 	}
 
 	return &REST{store}

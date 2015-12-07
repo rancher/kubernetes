@@ -20,28 +20,29 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
-	// Ensure that experimental/v1alpha1 package is initialized.
-	_ "k8s.io/kubernetes/pkg/apis/experimental/v1alpha1"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	// Ensure that extensions/v1beta1 package is initialized.
+	_ "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/tools"
+	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 )
 
-func newStorage(t *testing.T) (*REST, *tools.FakeEtcdClient) {
-	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "experimental")
-	return NewREST(etcdStorage), fakeClient
+func newStorage(t *testing.T) (*REST, *etcdtesting.EtcdTestServer) {
+	etcdStorage, server := registrytest.NewEtcdStorage(t, "extensions")
+	return NewREST(etcdStorage, generic.UndecoratedStorage), server
 }
 
-func validNewThirdPartyResource(name string) *experimental.ThirdPartyResource {
-	return &experimental.ThirdPartyResource{
+func validNewThirdPartyResource(name string) *extensions.ThirdPartyResource {
+	return &extensions.ThirdPartyResource{
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: api.NamespaceDefault,
 		},
-		Versions: []experimental.APIVersion{
+		Versions: []extensions.APIVersion{
 			{
 				Name: "stable/v1",
 			},
@@ -50,27 +51,29 @@ func validNewThirdPartyResource(name string) *experimental.ThirdPartyResource {
 }
 
 func TestCreate(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	rsrc := validNewThirdPartyResource("foo")
 	rsrc.ObjectMeta = api.ObjectMeta{}
 	test.TestCreate(
 		// valid
 		rsrc,
 		// invalid
-		&experimental.ThirdPartyResource{},
+		&extensions.ThirdPartyResource{},
 	)
 }
 
 func TestUpdate(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	test.TestUpdate(
 		// valid
 		validNewThirdPartyResource("foo"),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.ThirdPartyResource)
+			object := obj.(*extensions.ThirdPartyResource)
 			object.Description = "new description"
 			return object
 		},
@@ -78,26 +81,30 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	test.TestDelete(validNewThirdPartyResource("foo"))
 }
 
 func TestGet(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	test.TestGet(validNewThirdPartyResource("foo"))
 }
 
 func TestList(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	test.TestList(validNewThirdPartyResource("foo"))
 }
 
 func TestWatch(t *testing.T) {
-	storage, fakeClient := newStorage(t)
-	test := registrytest.New(t, fakeClient, storage.Etcd)
+	storage, server := newStorage(t)
+	defer server.Terminate(t)
+	test := registrytest.New(t, storage.Etcd)
 	test.TestWatch(
 		validNewThirdPartyResource("foo"),
 		// matching labels

@@ -114,7 +114,7 @@ func TestResourceQuotaList(t *testing.T) {
 		},
 		Response: Response{StatusCode: 200, Body: resourceQuotaList},
 	}
-	response, err := c.Setup(t).ResourceQuotas(ns).List(labels.Everything())
+	response, err := c.Setup(t).ResourceQuotas(ns).List(labels.Everything(), fields.Everything())
 	c.Validate(t, response, err)
 }
 
@@ -193,6 +193,6 @@ func TestResourceQuotaWatch(t *testing.T) {
 			Query:  url.Values{"resourceVersion": []string{}}},
 		Response: Response{StatusCode: 200},
 	}
-	_, err := c.Setup(t).ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), "")
+	_, err := c.Setup(t).ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), api.ListOptions{})
 	c.Validate(t, nil, err)
 }

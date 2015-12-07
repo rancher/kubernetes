@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/locally.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/locally.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -40,6 +40,7 @@ Getting started locally
     - [Docker](#docker)
     - [etcd](#etcd)
     - [go](#go)
+- [Clone the repository](#clone-the-repository)
 - [Starting the cluster](#starting-the-cluster)
 - [Running a container](#running-a-container)
 - [Running a user defined pod](#running-a-user-defined-pod)
@@ -70,6 +71,14 @@ You need an [etcd](https://github.com/coreos/etcd/releases) in your path, please
 #### go
 
 You need [go](https://golang.org/doc/install) at least 1.3+ in your path, please make sure it is installed and in your ``$PATH``.
+
+### Clone the repository
+
+In order to run kubernetes you must have the kubernetes code on the local machine. Cloning this repository is sufficient.
+
+```$ git clone --depth=1 https://github.com/kubernetes/kubernetes.git```
+
+The `--depth=1` parameter is optional and will ensure a smaller download.
 
 ### Starting the cluster
 
@@ -157,7 +166,7 @@ hack/local-up-cluster.sh
 
 #### kubectl claims to start a container but `get pods` and `docker ps` don't show it.
 
-One or more of the KUbernetes daemons might've crashed. Tail the logs of each in /tmp.
+One or more of the Kubernetes daemons might've crashed. Tail the logs of each in /tmp.
 
 #### The pods fail to connect to the services by host names
 

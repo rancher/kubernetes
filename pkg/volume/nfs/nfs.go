@@ -147,6 +147,15 @@ type nfsBuilder struct {
 
 var _ volume.Builder = &nfsBuilder{}
 
+func (b *nfsBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    b.readOnly,
+		Managed:                     false,
+		SupportsOwnershipManagement: false,
+		SupportsSELinux:             false,
+	}
+}
+
 // SetUp attaches the disk and bind mounts to the volume path.
 func (b *nfsBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
@@ -194,10 +203,6 @@ func (b *nfsBuilder) SetUpAt(dir string) error {
 		return err
 	}
 	return nil
-}
-
-func (b *nfsBuilder) IsReadOnly() bool {
-	return b.readOnly
 }
 
 //

@@ -24,12 +24,20 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"k8s.io/kubernetes/cmd/kubelet/app"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/version/verflag"
 
+	"github.com/golang/glog"
 	"github.com/spf13/pflag"
+	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/cloudprovider"
+	cadvisor "k8s.io/kubernetes/pkg/kubelet/cadvisor/rancher"
+	"k8s.io/kubernetes/pkg/kubelet/dockertools"
+
+	rancher "github.com/rancher/go-rancher/client"
 )
 
 func main() {
@@ -43,8 +51,68 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	if err := s.Run(nil); err != nil {
+	cfg, err := injectRancherCfg(s)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
+
+	if err := s.Run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func injectRancherCfg(s *app.KubeletServer) (*app.KubeletConfig, error) {
+	if strings.ToLower(s.CloudProvider) != "rancher" {
+		return nil, nil
+	}
+
+	cfg, err := s.UnsecuredKubeletConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	clientConfig, err := s.CreateAPIServerClientConfig()
+	if err == nil {
+		cfg.KubeClient, err = client.New(clientConfig)
+
+		// make a separate client for events
+		eventClientConfig := *clientConfig
+		eventClientConfig.QPS = s.EventRecordQPS
+		eventClientConfig.Burst = s.EventBurst
+		cfg.EventClient, err = client.New(&eventClientConfig)
+	}
+	if err != nil && len(s.APIServerList) > 0 {
+		glog.Warningf("No API client: %v", err)
+	}
+
+	cloud, err := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
+	if err != nil {
+		return nil, err
+	}
+	glog.V(2).Infof("Successfully initialized cloud provider: %q from the config file: %q\n", s.CloudProvider, s.CloudConfigFile)
+	cfg.Cloud = cloud
+
+	rancherClient, err := rancher.NewRancherClient(&rancher.ClientOpts{
+		Url:       os.Getenv("CATTLE_URL"),
+		AccessKey: os.Getenv("CATTLE_ACCESS_KEY"),
+		SecretKey: os.Getenv("CATTLE_SECRET_KEY"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// for rancher monitoring
+	cfg.DockerDaemonContainer = ""
+
+	// reusing rancher's cadvisor
+	cfg.CAdvisorInterface, err = cadvisor.New("http://127.0.0.1:9344")
+	if err != nil {
+		glog.Error("Cannot connect to rancher's cadvisor")
+		cfg.CAdvisorInterface = nil
+	}
+
+	cfg.DockerClient, err = dockertools.NewRancherClient(cfg.DockerClient, rancherClient)
+	return cfg, err
 }

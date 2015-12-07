@@ -79,9 +79,12 @@ func init() {
 
 	flag.StringVar(&cloudConfig.ClusterTag, "cluster-tag", "", "Tag used to identify resources.  Only required if provider is aws.")
 	flag.IntVar(&testContext.MinStartupPods, "minStartupPods", 0, "The number of pods which we need to see in 'Running' state with a 'Ready' condition of true, before we try running tests. This is useful in any cluster which needs some base pod-based services running before it can be used.")
-	flag.StringVar(&testContext.UpgradeTarget, "upgrade-target", "latest_ci", "Version to upgrade to (e.g. 'latest_stable', 'latest_release', 'latest_ci', '0.19.1', '0.19.1-669-gabac8c8') if doing an upgrade test.")
+	flag.StringVar(&testContext.UpgradeTarget, "upgrade-target", "ci/latest", "Version to upgrade to (e.g. 'release/stable', 'release/latest', 'ci/latest', '0.19.1', '0.19.1-669-gabac8c8') if doing an upgrade test.")
 	flag.StringVar(&testContext.PrometheusPushGateway, "prom-push-gateway", "", "The URL to prometheus gateway, so that metrics can be pushed during e2es and scraped by prometheus. Typically something like 127.0.0.1:9091.")
 	flag.BoolVar(&testContext.VerifyServiceAccount, "e2e-verify-service-account", true, "If true tests will verify the service account before running.")
+	flag.BoolVar(&testContext.DeleteNamespace, "delete-namespace", true, "If true tests will delete namespace after completion. It is only designed to make debugging easier, DO NOT turn it off by default.")
+	flag.BoolVar(&testContext.CleanStart, "clean-start", false, "If true, purge all namespaces except default and system before running tests. This serves to cleanup test namespaces from failed/interrupted e2e runs in a long-lived cluster.")
+	flag.BoolVar(&testContext.GatherKubeSystemResourceUsageData, "gather-resource-usage", true, "If set to true framework will be monitoring resource usage of system add-ons in (some) e2e tests.")
 }
 
 func TestE2E(t *testing.T) {
@@ -120,9 +123,27 @@ func TestE2E(t *testing.T) {
 
 	// Disable skipped tests unless they are explicitly requested.
 	if config.GinkgoConfig.FocusString == "" && config.GinkgoConfig.SkipString == "" {
-		config.GinkgoConfig.SkipString = "Skipped"
+		config.GinkgoConfig.SkipString = `\[Skipped\]`
 	}
 	gomega.RegisterFailHandler(ginkgo.Fail)
+
+	c, err := loadClient()
+	if err != nil {
+		glog.Fatal("Error loading client: ", err)
+	}
+
+	// Delete any namespaces except default and kube-system. This ensures no
+	// lingering resources are left over from a previous test run.
+	if testContext.CleanStart {
+		deleted, err := deleteNamespaces(c, nil /* deleteFilter */, []string{api.NamespaceSystem, api.NamespaceDefault})
+		if err != nil {
+			t.Errorf("Error deleting orphaned namespaces: %v", err)
+		}
+		glog.Infof("Waiting for deletion of the following namespaces: %v", deleted)
+		if err := waitForNamespacesDeleted(c, deleted, namespaceCleanupTimeout); err != nil {
+			glog.Fatalf("Failed to delete orphaned namespaces %v: %v", deleted, err)
+		}
+	}
 
 	// Ensure all pods are running and ready before starting tests (otherwise,
 	// cluster infrastructure pods that are being pulled or started can block

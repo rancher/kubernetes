@@ -21,9 +21,7 @@ import (
 	"strings"
 
 	"k8s.io/kubernetes/pkg/api"
-	expapi "k8s.io/kubernetes/pkg/apis/experimental"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
+	expapi "k8s.io/kubernetes/pkg/apis/extensions"
 	thirdpartyresourceetcd "k8s.io/kubernetes/pkg/registry/thirdpartyresource/etcd"
 	"k8s.io/kubernetes/pkg/registry/thirdpartyresourcedata"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -76,7 +74,7 @@ func (t *ThirdPartyController) SyncOneResource(rsrc *expapi.ThirdPartyResource) 
 
 // Synchronize all resources with RESTful resources on the master
 func (t *ThirdPartyController) SyncResources() error {
-	list, err := t.thirdPartyResourceRegistry.List(api.NewDefaultContext(), labels.Everything(), fields.Everything())
+	list, err := t.thirdPartyResourceRegistry.List(api.NewDefaultContext(), nil)
 	if err != nil {
 		return err
 	}

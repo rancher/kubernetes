@@ -18,6 +18,7 @@ package iscsi
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
@@ -94,16 +95,17 @@ func (plugin *iscsiPlugin) newBuilderInternal(spec *volume.Spec, podUID types.UI
 	}
 
 	lun := strconv.Itoa(iscsi.Lun)
+	portal := portalBuilder(iscsi.TargetPortal)
 
 	return &iscsiDiskBuilder{
 		iscsiDisk: &iscsiDisk{
 			podUID:  podUID,
 			volName: spec.Name(),
-			portal:  iscsi.TargetPortal,
+			portal:  portal,
 			iqn:     iscsi.IQN,
 			lun:     lun,
 			manager: manager,
-			mounter: mounter,
+			mounter: &mount.SafeFormatAndMount{mounter, exec.New()},
 			plugin:  plugin},
 		fsType:   iscsi.FSType,
 		readOnly: readOnly,
@@ -156,6 +158,15 @@ type iscsiDiskBuilder struct {
 
 var _ volume.Builder = &iscsiDiskBuilder{}
 
+func (b *iscsiDiskBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    b.readOnly,
+		Managed:                     !b.readOnly,
+		SupportsOwnershipManagement: true,
+		SupportsSELinux:             true,
+	}
+}
+
 func (b *iscsiDiskBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
 }
@@ -175,10 +186,6 @@ type iscsiDiskCleaner struct {
 
 var _ volume.Cleaner = &iscsiDiskCleaner{}
 
-func (b *iscsiDiskBuilder) IsReadOnly() bool {
-	return b.readOnly
-}
-
 // Unmounts the bind mount, and detaches the disk only if the disk
 // resource was the last reference to that disk on the kubelet.
 func (c *iscsiDiskCleaner) TearDown() error {
@@ -187,4 +194,11 @@ func (c *iscsiDiskCleaner) TearDown() error {
 
 func (c *iscsiDiskCleaner) TearDownAt(dir string) error {
 	return diskTearDown(c.manager, *c, dir, c.mounter)
+}
+
+func portalBuilder(portal string) string {
+	if !strings.Contains(portal, ":") {
+		portal = portal + ":3260"
+	}
+	return portal
 }

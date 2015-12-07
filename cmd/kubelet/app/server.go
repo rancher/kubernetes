@@ -44,13 +44,17 @@ import (
 	"k8s.io/kubernetes/pkg/healthz"
 	"k8s.io/kubernetes/pkg/kubelet"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
+	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
 	"k8s.io/kubernetes/pkg/kubelet/network"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
+	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/chmod"
+	"k8s.io/kubernetes/pkg/util/chown"
 	"k8s.io/kubernetes/pkg/util/io"
 	"k8s.io/kubernetes/pkg/util/mount"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
@@ -58,6 +62,7 @@ import (
 	"k8s.io/kubernetes/pkg/volume"
 
 	"github.com/golang/glog"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 )
@@ -111,6 +116,8 @@ type KubeletServer struct {
 	MinimumGCAge                   time.Duration
 	NetworkPluginDir               string
 	NetworkPluginName              string
+	NodeLabels                     []string
+	NodeLabelsFile                 string
 	NodeStatusUpdateFrequency      time.Duration
 	OOMScoreAdj                    int
 	PodCIDR                        string
@@ -118,6 +125,7 @@ type KubeletServer struct {
 	Port                           uint
 	ReadOnlyPort                   uint
 	RegisterNode                   bool
+	RegisterSchedulable            bool
 	RegistryBurst                  int
 	RegistryPullQPS                float64
 	ResolverConfig                 string
@@ -132,6 +140,7 @@ type KubeletServer struct {
 	SystemContainer                string
 	TLSCertFile                    string
 	TLSPrivateKeyFile              string
+	ReconcileCIDR                  bool
 
 	// Flags intended for testing
 	// Is the kubelet containerized?
@@ -140,16 +149,22 @@ type KubeletServer struct {
 	ChaosChance float64
 	// Crash immediately, rather than eating panics.
 	ReallyCrashForTesting bool
+
+	KubeAPIQPS   float32
+	KubeAPIBurst int
+
+	// Pull images one at a time.
+	SerializeImagePulls bool
 }
 
 // bootstrapping interface for kubelet, targets the initialization protocol
 type KubeletBootstrap interface {
 	BirthCry()
 	StartGarbageCollection()
-	ListenAndServe(net.IP, uint, *kubelet.TLSOptions, bool)
-	ListenAndServeReadOnly(net.IP, uint)
-	Run(<-chan kubelet.PodUpdate)
-	RunOnce(<-chan kubelet.PodUpdate) ([]kubelet.RunPodResult, error)
+	ListenAndServe(address net.IP, port uint, tlsOptions *kubelet.TLSOptions, auth kubelet.AuthInterface, enableDebuggingHandlers bool)
+	ListenAndServeReadOnly(address net.IP, port uint)
+	Run(<-chan kubetypes.PodUpdate)
+	RunOnce(<-chan kubetypes.PodUpdate) ([]kubelet.RunPodResult, error)
 }
 
 // create and initialize a Kubelet instance
@@ -168,14 +183,16 @@ func NewKubeletServer() *KubeletServer {
 		CPUCFSQuota:                 false,
 		DockerDaemonContainer:       "/docker-daemon",
 		DockerExecHandlerName:       "native",
+		EventBurst:                  10,
+		EventRecordQPS:              5.0,
 		EnableDebuggingHandlers:     true,
 		EnableServer:                true,
 		FileCheckFrequency:          20 * time.Second,
 		HealthzBindAddress:          net.ParseIP("127.0.0.1"),
 		HealthzPort:                 10248,
-		HostNetworkSources:          kubelet.AllSource,
-		HostPIDSources:              kubelet.AllSource,
-		HostIPCSources:              kubelet.AllSource,
+		HostNetworkSources:          kubetypes.AllSource,
+		HostPIDSources:              kubetypes.AllSource,
+		HostIPCSources:              kubetypes.AllSource,
 		HTTPCheckFrequency:          20 * time.Second,
 		ImageGCHighThresholdPercent: 90,
 		ImageGCLowThresholdPercent:  80,
@@ -185,23 +202,62 @@ func NewKubeletServer() *KubeletServer {
 		MaxContainerCount:           100,
 		MaxPerPodContainerCount:     2,
 		MaxOpenFiles:                1000000,
+		MaxPods:                     40,
 		MinimumGCAge:                1 * time.Minute,
 		NetworkPluginDir:            "/usr/libexec/kubernetes/kubelet-plugins/net/exec/",
 		NetworkPluginName:           "",
+		NodeLabels:                  []string{},
+		NodeLabelsFile:              "",
 		NodeStatusUpdateFrequency:   10 * time.Second,
 		OOMScoreAdj:                 qos.KubeletOOMScoreAdj,
 		PodInfraContainerImage:      dockertools.PodInfraContainerImage,
-		Port:              ports.KubeletPort,
-		ReadOnlyPort:      ports.KubeletReadOnlyPort,
-		RegisterNode:      true, // will be ignored if no apiserver is configured
-		RegistryBurst:     10,
-		ResourceContainer: "/kubelet",
-		RktPath:           "",
-		RktStage1Image:    "",
-		RootDirectory:     defaultRootDir,
-		SyncFrequency:     10 * time.Second,
-		SystemContainer:   "",
+		Port:                           ports.KubeletPort,
+		ReadOnlyPort:                   ports.KubeletReadOnlyPort,
+		RegisterNode:                   true, // will be ignored if no apiserver is configured
+		RegisterSchedulable:            true,
+		RegistryBurst:                  10,
+		ResourceContainer:              "/kubelet",
+		RktPath:                        "",
+		RktStage1Image:                 "",
+		RootDirectory:                  defaultRootDir,
+		SerializeImagePulls:            true,
+		StreamingConnectionIdleTimeout: 5 * time.Minute,
+		SyncFrequency:                  1 * time.Minute,
+		SystemContainer:                "",
+		ReconcileCIDR:                  true,
+		KubeAPIQPS:                     5.0,
+		KubeAPIBurst:                   10,
 	}
+}
+
+// NewKubeletCommand creates a *cobra.Command object with default parameters
+func NewKubeletCommand() *cobra.Command {
+	s := NewKubeletServer()
+	s.AddFlags(pflag.CommandLine)
+	cmd := &cobra.Command{
+		Use: "kubelet",
+		Long: `The kubelet is the primary "node agent" that runs on each
+node. The kubelet works in terms of a PodSpec. A PodSpec is a YAML or JSON object
+that describes a pod. The kubelet takes a set of PodSpecs that are provided through
+various mechanisms (primarily through the apiserver) and ensures that the containers
+described in those PodSpecs are running and healthy.
+
+Other than from an PodSpec from the apiserver, there are three ways that a container
+manifest can be provided to the Kubelet.
+
+File: Path passed as a flag on the command line. This file is rechecked every 20
+seconds (configurable with a flag).
+
+HTTP endpoint: HTTP endpoint passed as a parameter on the command line. This endpoint
+is checked every 20 seconds (also configurable with a flag).
+
+HTTP server: The kubelet can also listen for HTTP and respond to a simple API
+(underspec'd currently) to submit a new manifest.`,
+		Run: func(cmd *cobra.Command, args []string) {
+		},
+	}
+
+	return cmd
 }
 
 // AddFlags adds flags for a specific KubeletServer to the specified FlagSet
@@ -215,7 +271,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.EnableServer, "enable-server", s.EnableServer, "Enable the Kubelet's server")
 	fs.IPVar(&s.Address, "address", s.Address, "The IP address for the Kubelet to serve on (set to 0.0.0.0 for all interfaces)")
 	fs.UintVar(&s.Port, "port", s.Port, "The port for the Kubelet to serve on. Note that \"kubectl logs\" will not work if you set this flag.") // see #9325
-	fs.UintVar(&s.ReadOnlyPort, "read-only-port", s.ReadOnlyPort, "The read-only port for the Kubelet to serve on (set to 0 to disable)")
+	fs.UintVar(&s.ReadOnlyPort, "read-only-port", s.ReadOnlyPort, "The read-only port for the Kubelet to serve on with no authentication/authorization (set to 0 to disable)")
 	fs.StringVar(&s.TLSCertFile, "tls-cert-file", s.TLSCertFile, ""+
 		"File containing x509 Certificate for HTTPS.  (CA cert, if any, concatenated after server cert). "+
 		"If --tls-cert-file and --tls-private-key-file are not provided, a self-signed certificate and key "+
@@ -233,7 +289,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostIPCSources, "host-ipc-sources", s.HostIPCSources, "Comma-separated list of sources from which the Kubelet allows pods to use the host ipc namespace. [default=\"*\"]")
 	fs.Float64Var(&s.RegistryPullQPS, "registry-qps", s.RegistryPullQPS, "If > 0, limit registry pull QPS to this value.  If 0, unlimited. [default=0.0]")
 	fs.IntVar(&s.RegistryBurst, "registry-burst", s.RegistryBurst, "Maximum size of a bursty pulls, temporarily allows pulls to burst to this number, while still not exceeding registry-qps.  Only used if --registry-qps > 0")
-	fs.Float32Var(&s.EventRecordQPS, "event-qps", s.EventRecordQPS, "If > 0, limit event creations per second to this value. If 0, unlimited. [default=0.0]")
+	fs.Float32Var(&s.EventRecordQPS, "event-qps", s.EventRecordQPS, "If > 0, limit event creations per second to this value. If 0, unlimited.")
 	fs.IntVar(&s.EventBurst, "event-burst", s.EventBurst, "Maximum size of a bursty event records, temporarily allows event records to burst to this number, while still not exceeding event-qps. Only used if --event-qps > 0")
 	fs.BoolVar(&s.RunOnce, "runonce", s.RunOnce, "If true, exit after spawning pods from local manifests or remote urls. Exclusive with --api-servers, and --enable-server")
 	fs.BoolVar(&s.EnableDebuggingHandlers, "enable-debugging-handlers", s.EnableDebuggingHandlers, "Enables server endpoints for log collection and local running of containers and commands")
@@ -252,10 +308,12 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ClusterDomain, "cluster-domain", s.ClusterDomain, "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
 	fs.StringVar(&s.MasterServiceNamespace, "master-service-namespace", s.MasterServiceNamespace, "The namespace from which the kubernetes master services should be injected into pods")
 	fs.IPVar(&s.ClusterDNS, "cluster-dns", s.ClusterDNS, "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
-	fs.DurationVar(&s.StreamingConnectionIdleTimeout, "streaming-connection-idle-timeout", 0, "Maximum time a streaming connection can be idle before the connection is automatically closed.  Example: '5m'")
+	fs.DurationVar(&s.StreamingConnectionIdleTimeout, "streaming-connection-idle-timeout", s.StreamingConnectionIdleTimeout, "Maximum time a streaming connection can be idle before the connection is automatically closed.  Example: '5m'")
+	fs.StringSliceVar(&s.NodeLabels, "node-label", []string{}, "add labels when registering the node in the cluster, the flag can be used multiple times (key=value)")
+	fs.StringVar(&s.NodeLabelsFile, "node-labels-file", "", "the path to a yaml or json file containing a series of key pair labels to apply on node registration")
 	fs.DurationVar(&s.NodeStatusUpdateFrequency, "node-status-update-frequency", s.NodeStatusUpdateFrequency, "Specifies how often kubelet posts node status to master. Note: be cautious when changing the constant, it must work with nodeMonitorGracePeriod in nodecontroller. Default: 10s")
-	fs.IntVar(&s.ImageGCHighThresholdPercent, "image-gc-high-threshold", s.ImageGCHighThresholdPercent, "The percent of disk usage after which image garbage collection is always run. Default: 90%%")
-	fs.IntVar(&s.ImageGCLowThresholdPercent, "image-gc-low-threshold", s.ImageGCLowThresholdPercent, "The percent of disk usage before which image garbage collection is never run. Lowest disk usage to garbage collect to. Default: 80%%")
+	fs.IntVar(&s.ImageGCHighThresholdPercent, "image-gc-high-threshold", s.ImageGCHighThresholdPercent, "The percent of disk usage after which image garbage collection is always run. Default: 90%")
+	fs.IntVar(&s.ImageGCLowThresholdPercent, "image-gc-low-threshold", s.ImageGCLowThresholdPercent, "The percent of disk usage before which image garbage collection is never run. Lowest disk usage to garbage collect to. Default: 80%")
 	fs.IntVar(&s.LowDiskSpaceThresholdMB, "low-diskspace-threshold-mb", s.LowDiskSpaceThresholdMB, "The absolute free disk space, in MB, to maintain. When disk space falls below this threshold, new pods would be rejected. Default: 256")
 	fs.StringVar(&s.NetworkPluginName, "network-plugin", s.NetworkPluginName, "<Warning: Alpha feature> The name of the network plugin to be invoked for various events in kubelet/pod lifecycle")
 	fs.StringVar(&s.NetworkPluginDir, "network-plugin-dir", s.NetworkPluginDir, "<Warning: Alpha feature> The full path of the directory in which to search for network plugins")
@@ -268,7 +326,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.RktStage1Image, "rkt-stage1-image", s.RktStage1Image, "image to use as stage1. Local paths and http/https URLs are supported. If empty, the 'stage1.aci' in the same directory as '--rkt-path' will be used")
 	fs.StringVar(&s.SystemContainer, "system-container", s.SystemContainer, "Optional resource-only container in which to place all non-kernel processes that are not already in a container. Empty for no container. Rolling back the flag requires a reboot. (Default: \"\").")
 	fs.BoolVar(&s.ConfigureCBR0, "configure-cbr0", s.ConfigureCBR0, "If true, kubelet will configure cbr0 based on Node.Spec.PodCIDR.")
-	fs.IntVar(&s.MaxPods, "max-pods", 40, "Number of Pods that can run on this Kubelet.")
+	fs.IntVar(&s.MaxPods, "max-pods", s.MaxPods, "Number of Pods that can run on this Kubelet.")
 	fs.StringVar(&s.DockerExecHandlerName, "docker-exec-handler", s.DockerExecHandlerName, "Handler to use when executing a command in a container. Valid values are 'native' and 'nsenter'. Defaults to 'native'.")
 	fs.StringVar(&s.PodCIDR, "pod-cidr", "", "The CIDR to use for pod IP addresses, only used in standalone mode.  In cluster mode, this is obtained from the master.")
 	fs.StringVar(&s.ResolverConfig, "resolv-conf", kubelet.ResolvConfDefault, "Resolver configuration file used as the basis for the container DNS resolution configuration.")
@@ -277,23 +335,28 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.ReallyCrashForTesting, "really-crash-for-testing", s.ReallyCrashForTesting, "If true, when panics occur crash. Intended for testing.")
 	fs.Float64Var(&s.ChaosChance, "chaos-chance", s.ChaosChance, "If > 0.0, introduce random client errors and latency. Intended for testing. [default=0.0]")
 	fs.BoolVar(&s.Containerized, "containerized", s.Containerized, "Experimental support for running kubelet in a container.  Intended for testing. [default=false]")
-	fs.Uint64Var(&s.MaxOpenFiles, "max-open-files", 1000000, "Number of files that can be opened by Kubelet process. [default=1000000]")
+	fs.Uint64Var(&s.MaxOpenFiles, "max-open-files", s.MaxOpenFiles, "Number of files that can be opened by Kubelet process. [default=1000000]")
+	fs.BoolVar(&s.ReconcileCIDR, "reconcile-cidr", s.ReconcileCIDR, "Reconcile node CIDR with the CIDR specified by the API server. No-op if register-node or configure-cbr0 is false. [default=true]")
+	fs.BoolVar(&s.RegisterSchedulable, "register-schedulable", s.RegisterSchedulable, "Register the node as schedulable. No-op if register-node is false. [default=true]")
+	fs.Float32Var(&s.KubeAPIQPS, "kube-api-qps", s.KubeAPIQPS, "QPS to use while talking with kubernetes apiserver")
+	fs.IntVar(&s.KubeAPIBurst, "kube-api-burst", s.KubeAPIBurst, "Burst to use while talking with kubernetes apiserver")
+	fs.BoolVar(&s.SerializeImagePulls, "serialize-image-pulls", s.SerializeImagePulls, "Pull images one at a time. We recommend *not* changing the default value on nodes that run docker daemon with version < 1.9 or an Aufs storage backend. Issue #10959 has more details. [default=true]")
 }
 
-// KubeletConfig returns a KubeletConfig suitable for being run, or an error if the server setup
-// is not valid.  It will not start any background processes.
-func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
-	hostNetworkSources, err := kubelet.GetValidatedSources(strings.Split(s.HostNetworkSources, ","))
+// UnsecuredKubeletConfig returns a KubeletConfig suitable for being run, or an error if the server setup
+// is not valid.  It will not start any background processes, and does not include authentication/authorization
+func (s *KubeletServer) UnsecuredKubeletConfig() (*KubeletConfig, error) {
+	hostNetworkSources, err := kubetypes.GetValidatedSources(strings.Split(s.HostNetworkSources, ","))
 	if err != nil {
 		return nil, err
 	}
 
-	hostPIDSources, err := kubelet.GetValidatedSources(strings.Split(s.HostPIDSources, ","))
+	hostPIDSources, err := kubetypes.GetValidatedSources(strings.Split(s.HostPIDSources, ","))
 	if err != nil {
 		return nil, err
 	}
 
-	hostIPCSources, err := kubelet.GetValidatedSources(strings.Split(s.HostIPCSources, ","))
+	hostIPCSources, err := kubetypes.GetValidatedSources(strings.Split(s.HostIPCSources, ","))
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +368,9 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 		mounter = mount.NewNsenterMounter()
 		writer = &io.NsenterWriter{}
 	}
+
+	chmodRunner := chmod.New()
+	chownRunner := chown.New()
 
 	tlsOptions, err := s.InitializeTLS()
 	if err != nil {
@@ -344,6 +410,7 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 	return &KubeletConfig{
 		Address:                   s.Address,
 		AllowPrivileged:           s.AllowPrivileged,
+		Auth:                      nil, // default does not enforce auth[nz]
 		CAdvisorInterface:         nil, // launches background processes, not set here
 		CgroupRoot:                s.CgroupRoot,
 		Cloud:                     nil, // cloud provider might start background processes
@@ -351,6 +418,7 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 		ClusterDomain:             s.ClusterDomain,
 		ConfigFile:                s.Config,
 		ConfigureCBR0:             s.ConfigureCBR0,
+		ContainerManager:          nil,
 		ContainerRuntime:          s.ContainerRuntime,
 		CPUCFSQuota:               s.CPUCFSQuota,
 		DiskSpacePolicy:           diskSpacePolicy,
@@ -378,16 +446,22 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 		MaxPods:                   s.MaxPods,
 		MinimumGCAge:              s.MinimumGCAge,
 		Mounter:                   mounter,
+		ChownRunner:               chownRunner,
+		ChmodRunner:               chmodRunner,
 		NetworkPluginName:         s.NetworkPluginName,
 		NetworkPlugins:            ProbeNetworkPlugins(s.NetworkPluginDir),
+		NodeLabels:                s.NodeLabels,
+		NodeLabelsFile:            s.NodeLabelsFile,
 		NodeStatusUpdateFrequency: s.NodeStatusUpdateFrequency,
 		OOMAdjuster:               oom.NewOOMAdjuster(),
 		OSInterface:               kubecontainer.RealOS{},
 		PodCIDR:                   s.PodCIDR,
+		ReconcileCIDR:             s.ReconcileCIDR,
 		PodInfraContainerImage:    s.PodInfraContainerImage,
 		Port:                           s.Port,
 		ReadOnlyPort:                   s.ReadOnlyPort,
 		RegisterNode:                   s.RegisterNode,
+		RegisterSchedulable:            s.RegisterSchedulable,
 		RegistryBurst:                  s.RegistryBurst,
 		RegistryPullQPS:                s.RegistryPullQPS,
 		ResolverConfig:                 s.ResolverConfig,
@@ -396,6 +470,7 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 		RktStage1Image:                 s.RktStage1Image,
 		RootDirectory:                  s.RootDirectory,
 		Runonce:                        s.RunOnce,
+		SerializeImagePulls:            s.SerializeImagePulls,
 		StandaloneMode:                 (len(s.APIServerList) == 0),
 		StreamingConnectionIdleTimeout: s.StreamingConnectionIdleTimeout,
 		SyncFrequency:                  s.SyncFrequency,
@@ -411,8 +486,9 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 // Otherwise, the caller is assumed to have set up the KubeletConfig object and all defaults
 // will be ignored.
 func (s *KubeletServer) Run(kcfg *KubeletConfig) error {
+	var err error
 	if kcfg == nil {
-		cfg, err := s.KubeletConfig()
+		cfg, err := s.UnsecuredKubeletConfig()
 		if err != nil {
 			return err
 		}
@@ -421,6 +497,12 @@ func (s *KubeletServer) Run(kcfg *KubeletConfig) error {
 		clientConfig, err := s.CreateAPIServerClientConfig()
 		if err == nil {
 			kcfg.KubeClient, err = client.New(clientConfig)
+
+			// make a separate client for events
+			eventClientConfig := *clientConfig
+			eventClientConfig.QPS = s.EventRecordQPS
+			eventClientConfig.Burst = s.EventBurst
+			kcfg.EventClient, err = client.New(&eventClientConfig)
 		}
 		if err != nil && len(s.APIServerList) > 0 {
 			glog.Warningf("No API client: %v", err)
@@ -435,11 +517,17 @@ func (s *KubeletServer) Run(kcfg *KubeletConfig) error {
 	}
 
 	if kcfg.CAdvisorInterface == nil {
-		ca, err := cadvisor.New(s.CAdvisorPort)
+		kcfg.CAdvisorInterface, err = cadvisor.New(s.CAdvisorPort)
 		if err != nil {
 			return err
 		}
-		kcfg.CAdvisorInterface = ca
+	}
+
+	if kcfg.ContainerManager == nil {
+		kcfg.ContainerManager, err = cm.NewContainerManager(kcfg.Mounter, kcfg.CAdvisorInterface)
+		if err != nil {
+			return err
+		}
 	}
 
 	util.ReallyCrash = s.ReallyCrashForTesting
@@ -570,6 +658,11 @@ func (s *KubeletServer) CreateAPIServerClientConfig() (*client.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Override kubeconfig qps/burst settings from flags
+	clientConfig.QPS = s.KubeAPIQPS
+	clientConfig.Burst = s.KubeAPIBurst
+
 	s.addChaosToClientConfig(clientConfig)
 	return clientConfig, nil
 }
@@ -602,7 +695,7 @@ func SimpleKubelet(client *client.Client,
 	osInterface kubecontainer.OSInterface,
 	fileCheckFrequency, httpCheckFrequency, minimumGCAge, nodeStatusUpdateFrequency, syncFrequency time.Duration,
 	maxPods int,
-) *KubeletConfig {
+	containerManager cm.ContainerManager) *KubeletConfig {
 	imageGCPolicy := kubelet.ImageGCPolicy{
 		HighThresholdPercent: 90,
 		LowThresholdPercent:  80,
@@ -618,6 +711,7 @@ func SimpleKubelet(client *client.Client,
 		CgroupRoot:                "",
 		Cloud:                     cloud,
 		ConfigFile:                configFilePath,
+		ContainerManager:          containerManager,
 		ContainerRuntime:          "docker",
 		CPUCFSQuota:               false,
 		DiskSpacePolicy:           diskSpacePolicy,
@@ -639,21 +733,25 @@ func SimpleKubelet(client *client.Client,
 		MaxPods:                   maxPods,
 		MinimumGCAge:              minimumGCAge,
 		Mounter:                   mount.New(),
+		ChownRunner:               chown.New(),
+		ChmodRunner:               chmod.New(),
 		NodeStatusUpdateFrequency: nodeStatusUpdateFrequency,
 		OOMAdjuster:               oom.NewFakeOOMAdjuster(),
 		OSInterface:               osInterface,
 		PodInfraContainerImage:    dockertools.PodInfraContainerImage,
-		Port:              port,
-		ReadOnlyPort:      readOnlyPort,
-		RegisterNode:      true,
-		ResolverConfig:    kubelet.ResolvConfDefault,
-		ResourceContainer: "/kubelet",
-		RootDirectory:     rootDir,
-		SyncFrequency:     syncFrequency,
-		SystemContainer:   "",
-		TLSOptions:        tlsOptions,
-		Writer:            &io.StdWriter{},
-		VolumePlugins:     volumePlugins,
+		Port:                port,
+		ReadOnlyPort:        readOnlyPort,
+		RegisterNode:        true,
+		RegisterSchedulable: true,
+		ResolverConfig:      kubelet.ResolvConfDefault,
+		ResourceContainer:   "/kubelet",
+		RootDirectory:       rootDir,
+		SerializeImagePulls: true,
+		SyncFrequency:       syncFrequency,
+		SystemContainer:     "",
+		TLSOptions:          tlsOptions,
+		VolumePlugins:       volumePlugins,
+		Writer:              &io.StdWriter{},
 	}
 	return &kcfg
 }
@@ -690,15 +788,9 @@ func RunKubelet(kcfg *KubeletConfig) error {
 	eventBroadcaster := record.NewBroadcaster()
 	kcfg.Recorder = eventBroadcaster.NewRecorder(api.EventSource{Component: "kubelet", Host: kcfg.NodeName})
 	eventBroadcaster.StartLogging(glog.V(3).Infof)
-	if kcfg.KubeClient != nil {
+	if kcfg.EventClient != nil {
 		glog.V(4).Infof("Sending events to api server.")
-		if kcfg.EventRecordQPS == 0.0 {
-			eventBroadcaster.StartRecordingToSink(kcfg.KubeClient.Events(""))
-		} else {
-			eventClient := *kcfg.KubeClient
-			eventClient.Throttle = util.NewTokenBucketRateLimiter(kcfg.EventRecordQPS, kcfg.EventBurst)
-			eventBroadcaster.StartRecordingToSink(eventClient.Events(""))
-		}
+		eventBroadcaster.StartRecordingToSink(kcfg.EventClient.Events(""))
 	} else {
 		glog.Warning("No api server defined - no events will be sent to API server.")
 	}
@@ -746,7 +838,7 @@ func startKubelet(k KubeletBootstrap, podCfg *config.PodConfig, kc *KubeletConfi
 	// start the kubelet server
 	if kc.EnableServer {
 		go util.Until(func() {
-			k.ListenAndServe(kc.Address, kc.Port, kc.TLSOptions, kc.EnableDebuggingHandlers)
+			k.ListenAndServe(kc.Address, kc.Port, kc.TLSOptions, kc.Auth, kc.EnableDebuggingHandlers)
 		}, 0, util.NeverStop)
 	}
 	if kc.ReadOnlyPort > 0 {
@@ -763,17 +855,17 @@ func makePodSourceConfig(kc *KubeletConfig) *config.PodConfig {
 	// define file config source
 	if kc.ConfigFile != "" {
 		glog.Infof("Adding manifest file: %v", kc.ConfigFile)
-		config.NewSourceFile(kc.ConfigFile, kc.NodeName, kc.FileCheckFrequency, cfg.Channel(kubelet.FileSource))
+		config.NewSourceFile(kc.ConfigFile, kc.NodeName, kc.FileCheckFrequency, cfg.Channel(kubetypes.FileSource))
 	}
 
 	// define url config source
 	if kc.ManifestURL != "" {
 		glog.Infof("Adding manifest url %q with HTTP header %v", kc.ManifestURL, kc.ManifestURLHeader)
-		config.NewSourceURL(kc.ManifestURL, kc.ManifestURLHeader, kc.NodeName, kc.HTTPCheckFrequency, cfg.Channel(kubelet.HTTPSource))
+		config.NewSourceURL(kc.ManifestURL, kc.ManifestURLHeader, kc.NodeName, kc.HTTPCheckFrequency, cfg.Channel(kubetypes.HTTPSource))
 	}
 	if kc.KubeClient != nil {
 		glog.Infof("Watching apiserver")
-		config.NewSourceApiserver(kc.KubeClient, kc.NodeName, cfg.Channel(kubelet.ApiserverSource))
+		config.NewSourceApiserver(kc.KubeClient, kc.NodeName, cfg.Channel(kubetypes.ApiserverSource))
 	}
 	return cfg
 }
@@ -783,6 +875,7 @@ func makePodSourceConfig(kc *KubeletConfig) *config.PodConfig {
 type KubeletConfig struct {
 	Address                        net.IP
 	AllowPrivileged                bool
+	Auth                           kubelet.AuthInterface
 	Builder                        KubeletBuilder
 	CAdvisorInterface              cadvisor.Interface
 	CgroupRoot                     string
@@ -791,6 +884,7 @@ type KubeletConfig struct {
 	ClusterDomain                  string
 	ConfigFile                     string
 	ConfigureCBR0                  bool
+	ContainerManager               cm.ContainerManager
 	ContainerRuntime               string
 	CPUCFSQuota                    bool
 	DiskSpacePolicy                kubelet.DiskSpacePolicy
@@ -799,6 +893,7 @@ type KubeletConfig struct {
 	DockerExecHandler              dockertools.ExecHandler
 	EnableDebuggingHandlers        bool
 	EnableServer                   bool
+	EventClient                    *client.Client
 	EventBurst                     int
 	EventRecordQPS                 float32
 	FileCheckFrequency             time.Duration
@@ -819,19 +914,25 @@ type KubeletConfig struct {
 	MaxPods                        int
 	MinimumGCAge                   time.Duration
 	Mounter                        mount.Interface
+	ChownRunner                    chown.Interface
+	ChmodRunner                    chmod.Interface
 	NetworkPluginName              string
 	NetworkPlugins                 []network.NetworkPlugin
 	NodeName                       string
+	NodeLabels                     []string
+	NodeLabelsFile                 string
 	NodeStatusUpdateFrequency      time.Duration
 	OOMAdjuster                    *oom.OOMAdjuster
 	OSInterface                    kubecontainer.OSInterface
 	PodCIDR                        string
+	ReconcileCIDR                  bool
 	PodConfig                      *config.PodConfig
 	PodInfraContainerImage         string
 	Port                           uint
 	ReadOnlyPort                   uint
 	Recorder                       record.EventRecorder
 	RegisterNode                   bool
+	RegisterSchedulable            bool
 	RegistryBurst                  int
 	RegistryPullQPS                float64
 	ResolverConfig                 string
@@ -840,6 +941,7 @@ type KubeletConfig struct {
 	RktStage1Image                 string
 	RootDirectory                  string
 	Runonce                        bool
+	SerializeImagePulls            bool
 	StandaloneMode                 bool
 	StreamingConnectionIdleTimeout time.Duration
 	SyncFrequency                  time.Duration
@@ -860,7 +962,7 @@ func CreateAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.Pod
 		kubeClient = kc.KubeClient
 	}
 
-	gcPolicy := kubelet.ContainerGCPolicy{
+	gcPolicy := kubecontainer.ContainerGCPolicy{
 		MinAge:             kc.MinimumGCAge,
 		MaxPerPodContainer: kc.MaxPerPodContainerCount,
 		MaxContainers:      kc.MaxContainerCount,
@@ -889,6 +991,7 @@ func CreateAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.Pod
 		gcPolicy,
 		pc.SeenAllSources,
 		kc.RegisterNode,
+		kc.RegisterSchedulable,
 		kc.StandaloneMode,
 		kc.ClusterDomain,
 		kc.ClusterDNS,
@@ -902,6 +1005,8 @@ func CreateAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.Pod
 		kc.ImageGCPolicy,
 		kc.DiskSpacePolicy,
 		kc.Cloud,
+		kc.NodeLabels,
+		kc.NodeLabelsFile,
 		kc.NodeStatusUpdateFrequency,
 		kc.ResourceContainer,
 		kc.OSInterface,
@@ -911,16 +1016,22 @@ func CreateAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.Pod
 		kc.RktStage1Image,
 		kc.Mounter,
 		kc.Writer,
+		kc.ChownRunner,
+		kc.ChmodRunner,
 		kc.DockerDaemonContainer,
 		kc.SystemContainer,
 		kc.ConfigureCBR0,
 		kc.PodCIDR,
+		kc.ReconcileCIDR,
 		kc.MaxPods,
 		kc.DockerExecHandler,
 		kc.ResolverConfig,
 		kc.CPUCFSQuota,
 		daemonEndpoints,
-		kc.OOMAdjuster)
+		kc.OOMAdjuster,
+		kc.SerializeImagePulls,
+		kc.ContainerManager,
+	)
 
 	if err != nil {
 		return nil, nil, err

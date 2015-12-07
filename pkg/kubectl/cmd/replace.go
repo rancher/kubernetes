@@ -44,7 +44,7 @@ JSON and YAML formats are accepted. If replacing an existing resource, the
 complete resource spec must be provided. This can be obtained by
 $ kubectl get TYPE NAME -o yaml
 
-Please refer to the models in https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/HEAD/docs/api-reference/definitions.html to find if a field is mutable.`
+Please refer to the models in https://htmlpreview.github.io/?https://github.com/kubernetes/kubernetes/blob/HEAD/docs/api-reference/v1/definitions.html to find if a field is mutable.`
 	replace_example = `# Replace a pod using the data in pod.json.
 $ kubectl replace -f ./pod.json
 
@@ -83,6 +83,7 @@ func NewCmdReplace(f *cmdutil.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().Duration("timeout", 0, "Only relevant during a force replace. The length of time to wait before giving up on a delete of the old resource, zero means determine a timeout from the size of the object")
 	cmdutil.AddValidateFlags(cmd)
 	cmdutil.AddOutputFlagsForMutation(cmd)
+	cmdutil.AddApplyAnnotationFlags(cmd)
 	return cmd
 }
 
@@ -127,14 +128,17 @@ func RunReplace(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []st
 		if err != nil {
 			return err
 		}
-		data, err := info.Mapping.Codec.Encode(info.Object)
+
+		if err := kubectl.CreateOrUpdateAnnotation(cmdutil.GetFlagBool(cmd, cmdutil.ApplyAnnotationsFlag), info); err != nil {
+			return cmdutil.AddSourceToErr("replacing", info.Source, err)
+		}
+
+		// Serialize the object with the annotation applied.
+		obj, err := resource.NewHelper(info.Client, info.Mapping).Replace(info.Namespace, info.Name, true, info.Object)
 		if err != nil {
 			return cmdutil.AddSourceToErr("replacing", info.Source, err)
 		}
-		obj, err := resource.NewHelper(info.Client, info.Mapping).Replace(info.Namespace, info.Name, true, data)
-		if err != nil {
-			return cmdutil.AddSourceToErr("replacing", info.Source, err)
-		}
+
 		info.Refresh(obj, true)
 		printObjectSpecificMessage(obj, out)
 		cmdutil.PrintSuccess(mapper, shortOutput, out, info.Mapping.Resource, info.Name, "replaced")
@@ -211,14 +215,16 @@ func forceReplace(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []
 		if err != nil {
 			return err
 		}
-		data, err := info.Mapping.Codec.Encode(info.Object)
+
+		if err := kubectl.CreateOrUpdateAnnotation(cmdutil.GetFlagBool(cmd, cmdutil.ApplyAnnotationsFlag), info); err != nil {
+			return err
+		}
+
+		obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, info.Object)
 		if err != nil {
 			return err
 		}
-		obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, data)
-		if err != nil {
-			return err
-		}
+
 		count++
 		info.Refresh(obj, true)
 		printObjectSpecificMessage(obj, out)

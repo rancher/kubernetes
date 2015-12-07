@@ -156,16 +156,21 @@ type FakeVolume struct {
 	Plugin  *FakeVolumePlugin
 }
 
+func (_ *FakeVolume) GetAttributes() Attributes {
+	return Attributes{
+		ReadOnly:                    false,
+		Managed:                     true,
+		SupportsOwnershipManagement: true,
+		SupportsSELinux:             true,
+	}
+}
+
 func (fv *FakeVolume) SetUp() error {
 	return fv.SetUpAt(fv.GetPath())
 }
 
 func (fv *FakeVolume) SetUpAt(dir string) error {
 	return os.MkdirAll(dir, 0750)
-}
-
-func (fv *FakeVolume) IsReadOnly() bool {
-	return false
 }
 
 func (fv *FakeVolume) GetPath() string {

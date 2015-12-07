@@ -21,6 +21,9 @@ import (
 	"strings"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/client/record"
+	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/third_party/golang/expansion"
 
@@ -29,24 +32,13 @@ import (
 
 // HandlerRunner runs a lifecycle handler for a container.
 type HandlerRunner interface {
-	Run(containerID string, pod *api.Pod, container *api.Container, handler *api.Handler) error
+	Run(containerID ContainerID, pod *api.Pod, container *api.Container, handler *api.Handler) error
 }
 
 // RunContainerOptionsGenerator generates the options that necessary for
 // container runtime to run a container.
 type RunContainerOptionsGenerator interface {
 	GenerateRunContainerOptions(pod *api.Pod, container *api.Container) (*RunContainerOptions, error)
-}
-
-// Trims runtime prefix from ID or image name (e.g.: docker://busybox -> busybox).
-func TrimRuntimePrefix(fullString string) string {
-	const prefixSeparator = "://"
-
-	idx := strings.Index(fullString, prefixSeparator)
-	if idx < 0 {
-		return fullString
-	}
-	return fullString[idx+len(prefixSeparator):]
 }
 
 // ShouldContainerBeRestarted checks whether a container needs to be restarted.
@@ -115,4 +107,46 @@ func ExpandContainerCommandAndArgs(container *api.Container, envs []EnvVar) (com
 	}
 
 	return command, args
+}
+
+// Create an event recorder to record object's event except implicitly required container's, like infra container.
+func FilterEventRecorder(recorder record.EventRecorder) record.EventRecorder {
+	return &innerEventRecorder{
+		recorder: recorder,
+	}
+}
+
+type innerEventRecorder struct {
+	recorder record.EventRecorder
+}
+
+func (irecorder *innerEventRecorder) shouldRecordEvent(object runtime.Object) (*api.ObjectReference, bool) {
+	if object == nil {
+		return nil, false
+	}
+	if ref, ok := object.(*api.ObjectReference); ok {
+		if !strings.HasPrefix(ref.FieldPath, ImplicitContainerPrefix) {
+			return ref, true
+		}
+	}
+	return nil, false
+}
+
+func (irecorder *innerEventRecorder) Event(object runtime.Object, eventtype, reason, message string) {
+	if ref, ok := irecorder.shouldRecordEvent(object); ok {
+		irecorder.recorder.Event(ref, eventtype, reason, message)
+	}
+}
+
+func (irecorder *innerEventRecorder) Eventf(object runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+	if ref, ok := irecorder.shouldRecordEvent(object); ok {
+		irecorder.recorder.Eventf(ref, eventtype, reason, messageFmt, args...)
+	}
+
+}
+
+func (irecorder *innerEventRecorder) PastEventf(object runtime.Object, timestamp unversioned.Time, eventtype, reason, messageFmt string, args ...interface{}) {
+	if ref, ok := irecorder.shouldRecordEvent(object); ok {
+		irecorder.recorder.PastEventf(ref, timestamp, eventtype, reason, messageFmt, args...)
+	}
 }

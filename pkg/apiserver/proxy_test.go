@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -94,7 +95,7 @@ func TestProxy(t *testing.T) {
 			server           *httptest.Server
 			proxyTestPattern string
 		}{
-			{namespaceServer, "/api/version2/proxy/namespaces/" + item.reqNamespace + "/foo/id" + item.path},
+			{namespaceServer, "/" + prefix + "/" + newGroupVersion.Group + "/" + newGroupVersion.Version + "/proxy/namespaces/" + item.reqNamespace + "/foo/id" + item.path},
 		}
 
 		for _, serverPattern := range serverPatterns {
@@ -171,6 +172,21 @@ func TestProxyUpgrade(t *testing.T) {
 			},
 			ProxyTransport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: localhostPool}},
 		},
+		"https (valid hostname + RootCAs + custom dialer)": {
+			ServerFunc: func(h http.Handler) *httptest.Server {
+				cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+				if err != nil {
+					t.Errorf("https (valid hostname): proxy_test: %v", err)
+				}
+				ts := httptest.NewUnstartedServer(h)
+				ts.TLS = &tls.Config{
+					Certificates: []tls.Certificate{cert},
+				}
+				ts.StartTLS()
+				return ts
+			},
+			ProxyTransport: &http.Transport{Dial: net.Dial, TLSClientConfig: &tls.Config{RootCAs: localhostPool}},
+		},
 	}
 
 	for k, tc := range testcases {
@@ -196,7 +212,7 @@ func TestProxyUpgrade(t *testing.T) {
 		server := httptest.NewServer(namespaceHandler)
 		defer server.Close()
 
-		ws, err := websocket.Dial("ws://"+server.Listener.Addr().String()+"/api/version2/proxy/namespaces/myns/foo/123", "", "http://127.0.0.1/")
+		ws, err := websocket.Dial("ws://"+server.Listener.Addr().String()+"/"+prefix+"/"+newGroupVersion.Group+"/"+newGroupVersion.Version+"/proxy/namespaces/myns/foo/123", "", "http://127.0.0.1/")
 		if err != nil {
 			t.Errorf("%s: websocket dial err: %s", k, err)
 			continue
@@ -260,7 +276,7 @@ func TestRedirectOnMissingTrailingSlash(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		proxyTestPattern := "/api/version2/proxy/namespaces/ns/foo/id" + item.path
+		proxyTestPattern := "/" + prefix + "/" + newGroupVersion.Group + "/" + newGroupVersion.Version + "/proxy/namespaces/ns/foo/id" + item.path
 		req, err := http.NewRequest(
 			"GET",
 			server.URL+proxyTestPattern+"?"+item.query,

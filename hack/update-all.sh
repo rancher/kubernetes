@@ -40,11 +40,14 @@ if $SILENT ; then
 	echo "Running in the silent mode, run with -v if you want to see script logs."
 fi
 
-BASH_TARGETS="generated-conversions
+BASH_TARGETS="codecgen
+	generated-conversions
 	generated-deep-copies 
 	generated-docs 
 	generated-swagger-docs 
-	swagger-spec"
+	swagger-spec
+	api-reference-docs"
+
 
 for t in $BASH_TARGETS
 do

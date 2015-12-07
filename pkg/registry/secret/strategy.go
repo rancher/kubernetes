@@ -26,7 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 )
 
 // strategy implements behavior for Secret objects
@@ -50,8 +50,11 @@ func (strategy) NamespaceScoped() bool {
 func (strategy) PrepareForCreate(obj runtime.Object) {
 }
 
-func (strategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (strategy) Validate(ctx api.Context, obj runtime.Object) utilvalidation.ErrorList {
 	return validation.ValidateSecret(obj.(*api.Secret))
+}
+
+func (strategy) Canonicalize(obj runtime.Object) {
 }
 
 func (strategy) AllowCreateOnUpdate() bool {
@@ -61,8 +64,8 @@ func (strategy) AllowCreateOnUpdate() bool {
 func (strategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
-func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
-	return validation.ValidateSecretUpdate(old.(*api.Secret), obj.(*api.Secret))
+func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
+	return validation.ValidateSecretUpdate(obj.(*api.Secret), old.(*api.Secret))
 }
 
 func (strategy) AllowUnconditionalUpdate() bool {

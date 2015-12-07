@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/aws.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/aws.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -90,6 +90,9 @@ export AWS_S3_BUCKET=mycompany-kubernetes-artifacts
 export INSTANCE_PREFIX=k8s
 ...
 ```
+
+The scripts will attempt to guess the correct size of the master and worker nodes based on `${NUM_MINIONS}`, in particular for clusters less than 50 nodes it will
+use a `t2.micro` for clusters between 50 and 150 nodes it will use a `t2.small` and for clusters with greater than 150 nodes it will use a `t2.medium`.
 
 It will also try to create or reuse a keypair called "kubernetes", and IAM profiles called "kubernetes-master" and "kubernetes-minion".
 If these already exist, make sure you want them to be used here.

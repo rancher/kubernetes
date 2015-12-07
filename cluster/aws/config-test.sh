@@ -15,9 +15,34 @@
 # limitations under the License.
 
 ZONE=${KUBE_AWS_ZONE:-us-west-2a}
-MASTER_SIZE=${MASTER_SIZE:-t2.micro}
-MINION_SIZE=${MINION_SIZE:-t2.micro}
+
+MASTER_SIZE=${MASTER_SIZE:-}
+MINION_SIZE=${MINION_SIZE:-}
 NUM_MINIONS=${NUM_MINIONS:-2}
+
+# Dynamically set node sizes so that Heapster has enough space to run
+if [[ -z ${MINION_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MINION_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MINION_SIZE="t2.small"
+  else
+    MINION_SIZE="t2.medium"
+  fi
+fi
+
+# Dynamically set the master size by the number of nodes, these are guesses
+# TODO: gather some data
+if [[ -z ${MASTER_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MASTER_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MASTER_SIZE="t2.small"
+  else
+    MASTER_SIZE="t2.medium"
+  fi
+fi
+
 
 # Because regions are globally named, we want to create in a single region; default to us-east-1
 AWS_S3_REGION=${AWS_S3_REGION:-us-east-1}
@@ -54,6 +79,11 @@ MASTER_IP_RANGE="${MASTER_IP_RANGE:-10.246.0.0/24}"
 # If set to auto, a new Elastic IP will be acquired
 # Otherwise amazon-given public ip will be used (it'll change with reboot).
 MASTER_RESERVED_IP="${MASTER_RESERVED_IP:-}"
+RUNTIME_CONFIG="${KUBE_RUNTIME_CONFIG:-}"
+
+# Enable various v1beta1 features
+ENABLE_DEPLOYMENTS="${KUBE_ENABLE_DEPLOYMENTS:-}"
+ENABLE_DAEMONSETS="${KUBE_ENABLE_DAEMONSETS:-}"
 
 # Optional: Cluster monitoring to setup as part of the cluster bring up:
 #   none     - No cluster monitoring setup
@@ -82,8 +112,17 @@ DNS_REPLICAS=1
 # Optional: Install Kubernetes UI
 ENABLE_CLUSTER_UI="${KUBE_ENABLE_CLUSTER_UI:-true}"
 
+# Optional: Create autoscaler for cluster's nodes.
+ENABLE_NODE_AUTOSCALER="${KUBE_ENABLE_NODE_AUTOSCALER:-false}"
+if [[ "${ENABLE_NODE_AUTOSCALER}" == "true" ]]; then
+  # TODO: actually configure ASG or similar
+  AUTOSCALER_MIN_NODES="${KUBE_AUTOSCALER_MIN_NODES:-1}"
+  AUTOSCALER_MAX_NODES="${KUBE_AUTOSCALER_MAX_NODES:-${NUM_MINIONS}}"
+  TARGET_NODE_UTILIZATION="${KUBE_TARGET_NODE_UTILIZATION:-0.7}"
+fi
+
 # Admission Controllers to invoke prior to persisting objects in cluster
-ADMISSION_CONTROL=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,DenyEscalatingExec,ResourceQuota
+ADMISSION_CONTROL=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota
 
 # Optional: Enable/disable public IP assignment for minions.
 # Important Note: disable only if you have setup a NAT instance for internet access and configured appropriate routes!
@@ -95,3 +134,6 @@ KUBE_MINION_IMAGE="${KUBE_MINION_IMAGE:-}"
 COREOS_CHANNEL="${COREOS_CHANNEL:-alpha}"
 CONTAINER_RUNTIME="${KUBE_CONTAINER_RUNTIME:-docker}"
 RKT_VERSION="${KUBE_RKT_VERSION:-0.5.5}"
+
+# Optional: if set to true, kube-up will configure the cluster to run e2e tests.
+E2E_STORAGE_TEST_ENVIRONMENT=${KUBE_E2E_STORAGE_TEST_ENVIRONMENT:-false}

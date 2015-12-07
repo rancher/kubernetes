@@ -33,7 +33,7 @@ import (
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 )
 
 // podStrategy implements behavior for Pods
@@ -67,9 +67,13 @@ func (podStrategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
 // Validate validates a new pod.
-func (podStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (podStrategy) Validate(ctx api.Context, obj runtime.Object) utilvalidation.ErrorList {
 	pod := obj.(*api.Pod)
 	return validation.ValidatePod(pod)
+}
+
+// Canonicalize normalizes the object after validation.
+func (podStrategy) Canonicalize(obj runtime.Object) {
 }
 
 // AllowCreateOnUpdate is false for pods.
@@ -78,7 +82,7 @@ func (podStrategy) AllowCreateOnUpdate() bool {
 }
 
 // ValidateUpdate is the default update validation for an end user.
-func (podStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (podStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
 	errorList := validation.ValidatePod(obj.(*api.Pod))
 	return append(errorList, validation.ValidatePodUpdate(obj.(*api.Pod), old.(*api.Pod))...)
 }
@@ -107,6 +111,10 @@ func (podStrategy) CheckGracefulDelete(obj runtime.Object, options *api.DeleteOp
 	}
 	// if the pod is not scheduled, delete immediately
 	if len(pod.Spec.NodeName) == 0 {
+		period = 0
+	}
+	// if the pod is already terminated, delete immediately
+	if pod.Status.Phase == api.PodFailed || pod.Status.Phase == api.PodSucceeded {
 		period = 0
 	}
 	// ensure the options and the pod are in sync
@@ -139,7 +147,7 @@ func (podStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
 	newPod.DeletionTimestamp = nil
 }
 
-func (podStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (podStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
 	// TODO: merge valid fields after update
 	return validation.ValidatePodStatusUpdate(obj.(*api.Pod), old.(*api.Pod))
 }
@@ -159,14 +167,15 @@ func MatchPod(label labels.Selector, field fields.Selector) generic.Matcher {
 	}
 }
 
-// PodToSelectableFields returns a label set that represents the object
+// PodToSelectableFields returns a field set that represents the object
 // TODO: fields are not labels, and the validation rules for them do not apply.
 func PodToSelectableFields(pod *api.Pod) fields.Set {
-	return fields.Set{
-		"metadata.name": pod.Name,
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(pod.ObjectMeta, true)
+	podSpecificFieldsSet := fields.Set{
 		"spec.nodeName": pod.Spec.NodeName,
 		"status.phase":  string(pod.Status.Phase),
 	}
+	return generic.MergeFieldsSets(objectMetaFieldsSet, podSpecificFieldsSet)
 }
 
 // ResourceGetter is an interface for retrieving resources by ResourceLocation.
@@ -187,10 +196,10 @@ func getPod(getter ResourceGetter, ctx api.Context, name string) (*api.Pod, erro
 }
 
 // ResourceLocation returns a URL to which one can send traffic for the specified pod.
-func ResourceLocation(getter ResourceGetter, ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
-	// Allow ID as "podname" or "podname:port".  If port is not specified,
-	// try to use the first defined port on the pod.
-	name, port, valid := util.SplitPort(id)
+func ResourceLocation(getter ResourceGetter, rt http.RoundTripper, ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
+	// Allow ID as "podname" or "podname:port" or "scheme:podname:port".
+	// If port is not specified, try to use the first defined port on the pod.
+	scheme, name, port, valid := util.SplitSchemeNamePort(id)
 	if !valid {
 		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid pod request %q", id))
 	}
@@ -211,15 +220,15 @@ func ResourceLocation(getter ResourceGetter, ctx api.Context, id string) (*url.U
 		}
 	}
 
-	// We leave off the scheme ('http://') because we have no idea what sort of server
-	// is listening at this endpoint.
-	loc := &url.URL{}
+	loc := &url.URL{
+		Scheme: scheme,
+	}
 	if port == "" {
 		loc.Host = pod.Status.PodIP
 	} else {
 		loc.Host = net.JoinHostPort(pod.Status.PodIP, port)
 	}
-	return loc, nil, nil
+	return loc, rt, nil
 }
 
 // LogLocation returns the log URL for a pod container. If opts.Container is blank

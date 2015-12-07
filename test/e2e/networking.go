@@ -26,7 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -51,7 +51,7 @@ var _ = Describe("Networking", func() {
 		}
 	})
 
-	It("should provide Internet connection for containers", func() {
+	It("should provide Internet connection for containers [Conformance]", func() {
 		By("Running container which tries to wget google.com")
 		podName := "wget-test"
 		contName := "wget-test-container"
@@ -82,7 +82,7 @@ var _ = Describe("Networking", func() {
 	})
 
 	// First test because it has no dependencies on variables created later on.
-	It("should provide unchanging, static URL paths for kubernetes api services.", func() {
+	It("should provide unchanging, static URL paths for kubernetes api services [Conformance]", func() {
 		tests := []struct {
 			path string
 		}{
@@ -103,7 +103,7 @@ var _ = Describe("Networking", func() {
 	})
 
 	//Now we can proceed with the test.
-	It("should function for intra-pod communication", func() {
+	It("should function for intra-pod communication [Conformance]", func() {
 
 		By(fmt.Sprintf("Creating a service named %q in namespace %q", svcname, f.Namespace.Name))
 		svc, err := f.Client.Services(f.Namespace.Name).Create(&api.Service{
@@ -117,7 +117,7 @@ var _ = Describe("Networking", func() {
 				Ports: []api.ServicePort{{
 					Protocol:   "TCP",
 					Port:       8080,
-					TargetPort: util.NewIntOrStringFromInt(8080),
+					TargetPort: intstr.FromInt(8080),
 				}},
 				Selector: map[string]string{
 					"name": svcname,

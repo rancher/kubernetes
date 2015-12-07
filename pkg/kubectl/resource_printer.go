@@ -37,7 +37,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -394,7 +394,7 @@ var ingressColumns = []string{"NAME", "RULE", "BACKEND", "ADDRESS"}
 var endpointColumns = []string{"NAME", "ENDPOINTS", "AGE"}
 var nodeColumns = []string{"NAME", "LABELS", "STATUS", "AGE"}
 var daemonSetColumns = []string{"NAME", "CONTAINER(S)", "IMAGE(S)", "SELECTOR", "NODE-SELECTOR"}
-var eventColumns = []string{"FIRSTSEEN", "LASTSEEN", "COUNT", "NAME", "KIND", "SUBOBJECT", "REASON", "SOURCE", "MESSAGE"}
+var eventColumns = []string{"FIRSTSEEN", "LASTSEEN", "COUNT", "NAME", "KIND", "SUBOBJECT", "TYPE", "REASON", "SOURCE", "MESSAGE"}
 var limitRangeColumns = []string{"NAME", "AGE"}
 var resourceQuotaColumns = []string{"NAME", "AGE"}
 var namespaceColumns = []string{"NAME", "LABELS", "STATUS", "AGE"}
@@ -498,13 +498,6 @@ func formatEndpoints(endpoints *api.Endpoints, ports sets.String) string {
 		return fmt.Sprintf("%s + %d more...", ret, count-max)
 	}
 	return ret
-}
-
-func podHostString(host, ip string) string {
-	if host == "" && ip == "" {
-		return "<unassigned>"
-	}
-	return host + "/" + ip
 }
 
 func shortHumanDuration(d time.Duration) string {
@@ -723,7 +716,7 @@ func printReplicationControllerList(list *api.ReplicationControllerList, w io.Wr
 	return nil
 }
 
-func printJob(job *experimental.Job, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printJob(job *extensions.Job, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	name := job.Name
 	namespace := job.Namespace
 	containers := job.Spec.Template.Spec.Containers
@@ -736,12 +729,14 @@ func printJob(job *experimental.Job, w io.Writer, withNamespace bool, wide bool,
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\n",
+
+	selector, _ := extensions.PodSelectorAsSelector(job.Spec.Selector)
+	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d",
 		name,
 		firstContainer.Name,
 		firstContainer.Image,
-		labels.FormatLabels(job.Spec.Selector),
-		job.Status.Successful)
+		selector.String(),
+		job.Status.Succeeded)
 	if err != nil {
 		return err
 	}
@@ -766,7 +761,7 @@ func printJob(job *experimental.Job, w io.Writer, withNamespace bool, wide bool,
 	return nil
 }
 
-func printJobList(list *experimental.JobList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printJobList(list *extensions.JobList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	for _, job := range list.Items {
 		if err := printJob(&job, w, withNamespace, wide, showAll, columnLabels); err != nil {
 			return err
@@ -857,14 +852,14 @@ func printServiceList(list *api.ServiceList, w io.Writer, withNamespace bool, wi
 }
 
 // backendStringer behaves just like a string interface and converts the given backend to a string.
-func backendStringer(backend *experimental.IngressBackend) string {
+func backendStringer(backend *extensions.IngressBackend) string {
 	if backend == nil {
 		return ""
 	}
 	return fmt.Sprintf("%v:%v", backend.ServiceName, backend.ServicePort.String())
 }
 
-func printIngress(ingress *experimental.Ingress, w io.Writer, withNamespace, wide bool, showAll bool, columnLabels []string) error {
+func printIngress(ingress *extensions.Ingress, w io.Writer, withNamespace, wide bool, showAll bool, columnLabels []string) error {
 	name := ingress.Name
 	namespace := ingress.Namespace
 
@@ -912,7 +907,7 @@ func printIngress(ingress *experimental.Ingress, w io.Writer, withNamespace, wid
 	return nil
 }
 
-func printIngressList(ingressList *experimental.IngressList, w io.Writer, withNamespace, wide bool, showAll bool, columnLabels []string) error {
+func printIngressList(ingressList *extensions.IngressList, w io.Writer, withNamespace, wide bool, showAll bool, columnLabels []string) error {
 	for _, ingress := range ingressList.Items {
 		if err := printIngress(&ingress, w, withNamespace, wide, true, columnLabels); err != nil {
 			return err
@@ -921,7 +916,7 @@ func printIngressList(ingressList *experimental.IngressList, w io.Writer, withNa
 	return nil
 }
 
-func printDaemonSet(ds *experimental.DaemonSet, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printDaemonSet(ds *extensions.DaemonSet, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	name := ds.Name
 	namespace := ds.Namespace
 
@@ -936,11 +931,16 @@ func printDaemonSet(ds *experimental.DaemonSet, w io.Writer, withNamespace bool,
 			return err
 		}
 	}
+	selector, err := extensions.PodSelectorAsSelector(ds.Spec.Selector)
+	if err != nil {
+		// this shouldn't happen if PodSelector passed validation
+		return err
+	}
 	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s",
 		name,
 		firstContainer.Name,
 		firstContainer.Image,
-		labels.FormatLabels(ds.Spec.Selector),
+		selector,
 		labels.FormatLabels(ds.Spec.Template.Spec.NodeSelector),
 	); err != nil {
 		return err
@@ -966,7 +966,7 @@ func printDaemonSet(ds *experimental.DaemonSet, w io.Writer, withNamespace bool,
 	return nil
 }
 
-func printDaemonSetList(list *experimental.DaemonSetList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printDaemonSetList(list *extensions.DaemonSetList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	for _, ds := range list.Items {
 		if err := printDaemonSet(&ds, w, withNamespace, wide, showAll, columnLabels); err != nil {
 			return err
@@ -1203,13 +1203,14 @@ func printEvent(event *api.Event, w io.Writer, withNamespace bool, wide bool, sh
 		}
 	}
 	if _, err := fmt.Fprintf(
-		w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s",
+		w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
 		translateTimestamp(event.FirstTimestamp),
 		translateTimestamp(event.LastTimestamp),
 		event.Count,
 		event.InvolvedObject.Name,
 		event.InvolvedObject.Kind,
 		event.InvolvedObject.FieldPath,
+		event.Type,
 		event.Reason,
 		event.Source,
 		event.Message,
@@ -1330,7 +1331,7 @@ func printComponentStatusList(list *api.ComponentStatusList, w io.Writer, withNa
 	return nil
 }
 
-func printThirdPartyResource(rsrc *experimental.ThirdPartyResource, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printThirdPartyResource(rsrc *extensions.ThirdPartyResource, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	versions := make([]string, len(rsrc.Versions))
 	for ix := range rsrc.Versions {
 		version := &rsrc.Versions[ix]
@@ -1343,7 +1344,7 @@ func printThirdPartyResource(rsrc *experimental.ThirdPartyResource, w io.Writer,
 	return nil
 }
 
-func printThirdPartyResourceList(list *experimental.ThirdPartyResourceList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printThirdPartyResourceList(list *extensions.ThirdPartyResourceList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	for _, item := range list.Items {
 		if err := printThirdPartyResource(&item, w, withNamespace, wide, showAll, columnLabels); err != nil {
 			return err
@@ -1353,7 +1354,7 @@ func printThirdPartyResourceList(list *experimental.ThirdPartyResourceList, w io
 	return nil
 }
 
-func printDeployment(deployment *experimental.Deployment, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printDeployment(deployment *extensions.Deployment, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	if withNamespace {
 		if _, err := fmt.Fprintf(w, "%s\t", deployment.Namespace); err != nil {
 			return err
@@ -1369,7 +1370,7 @@ func printDeployment(deployment *experimental.Deployment, w io.Writer, withNames
 	return err
 }
 
-func printDeploymentList(list *experimental.DeploymentList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printDeploymentList(list *extensions.DeploymentList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	for _, item := range list.Items {
 		if err := printDeployment(&item, w, withNamespace, wide, showAll, columnLabels); err != nil {
 			return err
@@ -1378,21 +1379,25 @@ func printDeploymentList(list *experimental.DeploymentList, w io.Writer, withNam
 	return nil
 }
 
-func printHorizontalPodAutoscaler(hpa *experimental.HorizontalPodAutoscaler, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printHorizontalPodAutoscaler(hpa *extensions.HorizontalPodAutoscaler, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	namespace := hpa.Namespace
 	name := hpa.Name
-	reference := fmt.Sprintf("%s/%s/%s/%s",
+	reference := fmt.Sprintf("%s/%s/%s",
 		hpa.Spec.ScaleRef.Kind,
-		hpa.Spec.ScaleRef.Namespace,
 		hpa.Spec.ScaleRef.Name,
 		hpa.Spec.ScaleRef.Subresource)
-	target := fmt.Sprintf("%s %v", hpa.Spec.Target.Quantity.String(), hpa.Spec.Target.Resource)
-
-	current := "<waiting>"
-	if hpa.Status.CurrentConsumption != nil {
-		current = fmt.Sprintf("%s %v", hpa.Status.CurrentConsumption.Quantity.String(), hpa.Status.CurrentConsumption.Resource)
+	target := "<unset>"
+	if hpa.Spec.CPUUtilization != nil {
+		target = fmt.Sprintf("%d%%", hpa.Spec.CPUUtilization.TargetPercentage)
 	}
-	minPods := hpa.Spec.MinReplicas
+	current := "<waiting>"
+	if hpa.Status.CurrentCPUUtilizationPercentage != nil {
+		current = fmt.Sprintf("%d%%", *hpa.Status.CurrentCPUUtilizationPercentage)
+	}
+	minPods := "<unset>"
+	if hpa.Spec.MinReplicas != nil {
+		minPods = fmt.Sprintf("%d", *hpa.Spec.MinReplicas)
+	}
 	maxPods := hpa.Spec.MaxReplicas
 	if withNamespace {
 		if _, err := fmt.Fprintf(w, "%s\t", namespace); err != nil {
@@ -1400,7 +1405,7 @@ func printHorizontalPodAutoscaler(hpa *experimental.HorizontalPodAutoscaler, w i
 		}
 	}
 
-	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s",
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s",
 		name,
 		reference,
 		target,
@@ -1415,7 +1420,7 @@ func printHorizontalPodAutoscaler(hpa *experimental.HorizontalPodAutoscaler, w i
 	return err
 }
 
-func printHorizontalPodAutoscalerList(list *experimental.HorizontalPodAutoscalerList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
+func printHorizontalPodAutoscalerList(list *extensions.HorizontalPodAutoscalerList, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	for i := range list.Items {
 		if err := printHorizontalPodAutoscaler(&list.Items[i], w, withNamespace, wide, showAll, columnLabels); err != nil {
 			return err
@@ -1475,10 +1480,19 @@ func formatWideHeaders(wide bool, t reflect.Type) []string {
 	return nil
 }
 
+// GetNewTabWriter returns a tabwriter that translates tabbed columns in input into properly aligned text.
+func GetNewTabWriter(output io.Writer) *tabwriter.Writer {
+	return tabwriter.NewWriter(output, tabwriterMinWidth, tabwriterWidth, tabwriterPadding, tabwriterPadChar, tabwriterFlags)
+}
+
 // PrintObj prints the obj in a human-friendly format according to the type of the obj.
 func (h *HumanReadablePrinter) PrintObj(obj runtime.Object, output io.Writer) error {
-	w := tabwriter.NewWriter(output, tabwriterMinWidth, tabwriterWidth, tabwriterPadding, tabwriterPadChar, tabwriterFlags)
-	defer w.Flush()
+	// if output is a tabwriter (when it's called by kubectl get), we use it; create a new tabwriter otherwise
+	w, found := output.(*tabwriter.Writer)
+	if !found {
+		w = GetNewTabWriter(output)
+		defer w.Flush()
+	}
 	t := reflect.TypeOf(obj)
 	if handler := h.handlerMap[t]; handler != nil {
 		if !h.noHeaders && t != h.lastType {
@@ -1533,11 +1547,11 @@ func (p *TemplatePrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 		// It is way easier to debug this stuff when it shows up in
 		// stdout instead of just stdin. So in addition to returning
 		// a nice error, also print useful stuff with the writer.
-		fmt.Fprintf(w, "Error executing template: %v\n", err)
-		fmt.Fprintf(w, "template was:\n\t%v\n", p.rawTemplate)
-		fmt.Fprintf(w, "raw data was:\n\t%v\n", string(data))
-		fmt.Fprintf(w, "object given to template engine was:\n\t%+v\n", out)
-		return fmt.Errorf("error executing template '%v': '%v'\n----data----\n%+v\n", p.rawTemplate, err, out)
+		fmt.Fprintf(w, "Error executing template: %v. Printing more information for debugging the template:\n", err)
+		fmt.Fprintf(w, "\ttemplate was:\n\t\t%v\n", p.rawTemplate)
+		fmt.Fprintf(w, "\traw data was:\n\t\t%v\n", string(data))
+		fmt.Fprintf(w, "\tobject given to template engine was:\n\t\t%+v\n\n", out)
+		return fmt.Errorf("error executing template %q: %v", p.rawTemplate, err)
 	}
 	return nil
 }
@@ -1684,10 +1698,10 @@ func (j *JSONPathPrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 	}
 
 	if err := j.JSONPath.Execute(w, queryObj); err != nil {
-		fmt.Fprintf(w, "Error executing template: %v\n", err)
-		fmt.Fprintf(w, "template was:\n\t%v\n", j.rawTemplate)
-		fmt.Fprintf(w, "object given to jsonpath engine was:\n\t%#v\n", queryObj)
-		return fmt.Errorf("error executing jsonpath '%v': '%v'\n----data----\n%+v\n", j.rawTemplate, err, obj)
+		fmt.Fprintf(w, "Error executing template: %v. Printing more information for debugging the template:\n", err)
+		fmt.Fprintf(w, "\ttemplate was:\n\t\t%v\n", j.rawTemplate)
+		fmt.Fprintf(w, "\tobject given to jsonpath engine was:\n\t\t%#v\n\n", queryObj)
+		return fmt.Errorf("error executing jsonpath %q: %v\n", j.rawTemplate, err)
 	}
 	return nil
 }

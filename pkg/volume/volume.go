@@ -30,6 +30,14 @@ type Volume interface {
 	GetPath() string
 }
 
+// Attributes represents the attributes of this builder.
+type Attributes struct {
+	ReadOnly                    bool
+	Managed                     bool
+	SupportsOwnershipManagement bool
+	SupportsSELinux             bool
+}
+
 // Builder interface provides methods to set up/mount the volume.
 type Builder interface {
 	// Uses Interface to provide the path for Docker binds.
@@ -42,9 +50,8 @@ type Builder interface {
 	// directory path, which may or may not exist yet.  This may be called
 	// more than once, so implementations must be idempotent.
 	SetUpAt(dir string) error
-	// IsReadOnly is a flag that gives the builder's ReadOnly attribute.
-	// All persistent volumes have a private readOnly flag in their builders.
-	IsReadOnly() bool
+	// GetAttributes returns the attributes of the builder.
+	GetAttributes() Attributes
 }
 
 // Cleaner interface provides methods to cleanup/unmount the volumes.

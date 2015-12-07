@@ -40,6 +40,8 @@ network_provider: '$(echo "$NETWORK_PROVIDER")'
 opencontrail_tag: '$(echo "$OPENCONTRAIL_TAG")'
 opencontrail_kubernetes_tag: '$(echo "$OPENCONTRAIL_KUBERNETES_TAG")'
 opencontrail_public_subnet: '$(echo "$OPENCONTRAIL_PUBLIC_SUBNET")'
+num_nodes: $(echo "${NUM_MINIONS}")
+e2e_storage_test_environment: '$(echo "$E2E_STORAGE_TEST_ENVIRONMENT" | sed -e "s/'/''/g")'
 EOF
 
 readonly BASIC_AUTH_FILE="/srv/salt-overlay/salt/kube-apiserver/basic_auth.csv"

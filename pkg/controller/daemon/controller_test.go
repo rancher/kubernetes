@@ -23,7 +23,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/controller"
@@ -38,11 +38,7 @@ var (
 	alwaysReady           = func() bool { return true }
 )
 
-func init() {
-	api.ForTesting_ReferencesAllowBlankSelfLinks = true
-}
-
-func getKey(ds *experimental.DaemonSet, t *testing.T) string {
+func getKey(ds *extensions.DaemonSet, t *testing.T) string {
 	if key, err := controller.KeyFunc(ds); err != nil {
 		t.Errorf("Unexpected error getting key for ds %v: %v", ds.Name, err)
 		return ""
@@ -51,15 +47,15 @@ func getKey(ds *experimental.DaemonSet, t *testing.T) string {
 	}
 }
 
-func newDaemonSet(name string) *experimental.DaemonSet {
-	return &experimental.DaemonSet{
-		TypeMeta: unversioned.TypeMeta{APIVersion: testapi.Experimental.Version()},
+func newDaemonSet(name string) *extensions.DaemonSet {
+	return &extensions.DaemonSet{
+		TypeMeta: unversioned.TypeMeta{APIVersion: testapi.Extensions.Version()},
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: api.NamespaceDefault,
 		},
-		Spec: experimental.DaemonSetSpec{
-			Selector: simpleDaemonSetLabel,
+		Spec: extensions.DaemonSetSpec{
+			Selector: &extensions.PodSelector{MatchLabels: simpleDaemonSetLabel},
 			Template: &api.PodTemplateSpec{
 				ObjectMeta: api.ObjectMeta{
 					Labels: simpleDaemonSetLabel,
@@ -87,6 +83,11 @@ func newNode(name string, label map[string]string) *api.Node {
 			Name:      name,
 			Labels:    label,
 			Namespace: api.NamespaceDefault,
+		},
+		Status: api.NodeStatus{
+			Conditions: []api.NodeCondition{
+				{Type: api.NodeReady, Status: api.ConditionTrue},
+			},
 		},
 	}
 }
@@ -129,8 +130,8 @@ func addPods(podStore cache.Store, nodeName string, label map[string]string, num
 }
 
 func newTestController() (*DaemonSetsController, *controller.FakePodControl) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
-	manager := NewDaemonSetsController(client)
+	client := client.NewOrDie(&client.Config{Host: "", GroupVersion: testapi.Default.GroupVersion()})
+	manager := NewDaemonSetsController(client, controller.NoResyncPeriodFunc)
 	manager.podStoreSynced = alwaysReady
 	podControl := &controller.FakePodControl{}
 	manager.podControl = podControl
@@ -146,7 +147,7 @@ func validateSyncDaemonSets(t *testing.T, fakePodControl *controller.FakePodCont
 	}
 }
 
-func syncAndValidateDaemonSets(t *testing.T, manager *DaemonSetsController, ds *experimental.DaemonSet, podControl *controller.FakePodControl, expectedCreates, expectedDeletes int) {
+func syncAndValidateDaemonSets(t *testing.T, manager *DaemonSetsController, ds *extensions.DaemonSet, podControl *controller.FakePodControl, expectedCreates, expectedDeletes int) {
 	key, err := controller.KeyFunc(ds)
 	if err != nil {
 		t.Errorf("Could not get key for daemon.")
@@ -179,6 +180,32 @@ func TestOneNodeDaemonLaunchesPod(t *testing.T) {
 	ds := newDaemonSet("foo")
 	manager.dsStore.Add(ds)
 	syncAndValidateDaemonSets(t, manager, ds, podControl, 1, 0)
+}
+
+// DaemonSets should not place onto NotReady nodes
+func TestNotReadNodeDaemonDoesNotLaunchPod(t *testing.T) {
+	manager, podControl := newTestController()
+	node := newNode("not-ready", nil)
+	node.Status = api.NodeStatus{
+		Conditions: []api.NodeCondition{
+			{Type: api.NodeReady, Status: api.ConditionFalse},
+		},
+	}
+	manager.nodeStore.Add(node)
+	ds := newDaemonSet("foo")
+	manager.dsStore.Add(ds)
+	syncAndValidateDaemonSets(t, manager, ds, podControl, 0, 0)
+}
+
+// DaemonSets should not place onto Unschedulable nodes
+func TestUnschedulableNodeDaemonDoesNotLaunchPod(t *testing.T) {
+	manager, podControl := newTestController()
+	node := newNode("not-ready", nil)
+	node.Spec.Unschedulable = true
+	manager.nodeStore.Add(node)
+	ds := newDaemonSet("foo")
+	manager.dsStore.Add(ds)
+	syncAndValidateDaemonSets(t, manager, ds, podControl, 0, 0)
 }
 
 // Controller should not create pods on nodes which have daemon pods, and should remove excess pods from nodes that have extra pods.

@@ -26,6 +26,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/jsonpath"
 )
@@ -167,8 +169,8 @@ func (s *CustomColumnsPrinter) PrintObj(obj runtime.Object, out io.Writer) error
 		}
 	}
 
-	if runtime.IsListType(obj) {
-		objs, err := runtime.ExtractList(obj)
+	if meta.IsListType(obj) {
+		objs, err := meta.ExtractList(obj)
 		if err != nil {
 			return err
 		}
@@ -187,6 +189,13 @@ func (s *CustomColumnsPrinter) PrintObj(obj runtime.Object, out io.Writer) error
 
 func (s *CustomColumnsPrinter) printOneObject(obj runtime.Object, parsers []*jsonpath.JSONPath, out io.Writer) error {
 	columns := make([]string, len(parsers))
+	switch u := obj.(type) {
+	case *runtime.Unknown:
+		var err error
+		if obj, err = api.Codec.Decode(u.RawJSON); err != nil {
+			return err
+		}
+	}
 	for ix := range parsers {
 		parser := parsers[ix]
 		values, err := parser.FindResults(reflect.ValueOf(obj).Elem().Interface())

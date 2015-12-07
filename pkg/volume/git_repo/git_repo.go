@@ -109,13 +109,18 @@ type gitRepoVolumeBuilder struct {
 
 var _ volume.Builder = &gitRepoVolumeBuilder{}
 
+func (b *gitRepoVolumeBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    false,
+		Managed:                     true,
+		SupportsOwnershipManagement: false,
+		SupportsSELinux:             true, // xattr change should be okay, TODO: double check
+	}
+}
+
 // SetUp creates new directory and clones a git repo.
 func (b *gitRepoVolumeBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
-}
-
-func (b *gitRepoVolumeBuilder) IsReadOnly() bool {
-	return false
 }
 
 // This is the spec for the volume that this plugin wraps.

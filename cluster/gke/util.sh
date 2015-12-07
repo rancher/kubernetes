@@ -63,8 +63,8 @@ function detect-project() {
 # Execute prior to running tests to build a release if required for env.
 function test-build-release() {
   echo "... in gke:test-build-release()" >&2
-  # We currently use the Kubernetes version that GKE supports (not testing
-  # bleeding-edge builds).
+  echo "... We currently use the Kubernetes version that GKE supports,"
+  echo "... not bleeding-edge builds."
 }
 
 # Verify needed binaries exist.
@@ -98,7 +98,8 @@ function verify-prereqs() {
   if [ ! -w $(dirname `which gcloud`) ]; then
     sudo_prefix="sudo"
   fi
-  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update preview || true
+  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update alpha || true
+  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update beta || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update ${CMD_GROUP:-} || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update kubectl|| true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update || true

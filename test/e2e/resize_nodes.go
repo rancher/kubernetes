@@ -29,18 +29,19 @@ import (
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
+	awscloud "k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 )
 
 const (
 	serveHostnameImage        = "gcr.io/google_containers/serve_hostname:1.1"
 	resizeNodeReadyTimeout    = 2 * time.Minute
 	resizeNodeNotReadyTimeout = 2 * time.Minute
+	testPort                  = 9376
 )
 
 func resizeGroup(size int) error {
@@ -56,7 +57,7 @@ func resizeGroup(size int) error {
 		return err
 	} else {
 		// Supported by aws
-		instanceGroups, ok := testContext.CloudConfig.Provider.(aws_cloud.InstanceGroups)
+		instanceGroups, ok := testContext.CloudConfig.Provider.(awscloud.InstanceGroups)
 		if !ok {
 			return fmt.Errorf("Provider does not support InstanceGroups")
 		}
@@ -78,7 +79,7 @@ func groupSize() (int, error) {
 		return len(re.FindAllString(string(output), -1)), nil
 	} else {
 		// Supported by aws
-		instanceGroups, ok := testContext.CloudConfig.Provider.(aws_cloud.InstanceGroups)
+		instanceGroups, ok := testContext.CloudConfig.Provider.(awscloud.InstanceGroups)
 		if !ok {
 			return -1, fmt.Errorf("provider does not support InstanceGroups")
 		}
@@ -111,25 +112,26 @@ func waitForGroupSize(size int) error {
 	return fmt.Errorf("timeout waiting %v for node instance group size to be %d", timeout, size)
 }
 
-func svcByName(name string) *api.Service {
+func svcByName(name string, port int) *api.Service {
 	return &api.Service{
 		ObjectMeta: api.ObjectMeta{
-			Name: "test-service",
+			Name: name,
 		},
 		Spec: api.ServiceSpec{
+			Type: api.ServiceTypeNodePort,
 			Selector: map[string]string{
 				"name": name,
 			},
 			Ports: []api.ServicePort{{
-				Port:       9376,
-				TargetPort: util.NewIntOrStringFromInt(9376),
+				Port:       port,
+				TargetPort: intstr.FromInt(port),
 			}},
 		},
 	}
 }
 
 func newSVCByName(c *client.Client, ns, name string) error {
-	_, err := c.Services(ns).Create(svcByName(name))
+	_, err := c.Services(ns).Create(svcByName(name, testPort))
 	return err
 }
 
@@ -336,14 +338,15 @@ func performTemporaryNetworkFailure(c *client.Client, ns, rcName string, replica
 		// may fail). Manual intervention is required in such case (recreating the
 		// cluster solves the problem too).
 		err := wait.Poll(time.Millisecond*100, time.Second*30, func() (bool, error) {
-			_, _, code, err := SSHVerbose(undropCmd, host, testContext.Provider)
-			if code == 0 && err == nil {
+			result, err := SSH(undropCmd, host, testContext.Provider)
+			if result.Code == 0 && err == nil {
 				return true, nil
-			} else {
-				Logf("Expected 0 exit code and nil error when running '%s' on %s, got %d and %v",
-					undropCmd, node.Name, code, err)
-				return false, nil
 			}
+			LogSSHResult(result)
+			if err != nil {
+				Logf("Unexpected error: %v", err)
+			}
+			return false, nil
 		})
 		if err != nil {
 			Failf("Failed to remove the iptable REJECT rule. Manual intervention is "+
@@ -362,9 +365,9 @@ func performTemporaryNetworkFailure(c *client.Client, ns, rcName string, replica
 	// We could also block network traffic from the master(s) to this node,
 	// but blocking it one way is sufficient for this test.
 	dropCmd := fmt.Sprintf("sudo iptables --insert %s", iptablesRule)
-	if _, _, code, err := SSHVerbose(dropCmd, host, testContext.Provider); code != 0 || err != nil {
-		Failf("Expected 0 exit code and nil error when running %s on %s, got %d and %v",
-			dropCmd, node.Name, code, err)
+	if result, err := SSH(dropCmd, host, testContext.Provider); result.Code != 0 || err != nil {
+		LogSSHResult(result)
+		Failf("Unexpected error: %v", err)
 	}
 
 	Logf("Waiting %v for node %s to be not ready after simulated network failure", resizeNodeNotReadyTimeout, node.Name)
@@ -384,17 +387,18 @@ func performTemporaryNetworkFailure(c *client.Client, ns, rcName string, replica
 }
 
 var _ = Describe("Nodes", func() {
-	framework := Framework{BaseName: "resize-nodes"}
+	framework := NewFramework("resize-nodes")
+	var systemPodsNo int
 	var c *client.Client
 	var ns string
 
 	BeforeEach(func() {
-		framework.beforeEach()
 		c = framework.Client
 		ns = framework.Namespace.Name
+		systemPods, err := c.Pods(api.NamespaceSystem).List(labels.Everything(), fields.Everything())
+		Expect(err).NotTo(HaveOccurred())
+		systemPodsNo = len(systemPods.Items)
 	})
-
-	AfterEach(framework.afterEach)
 
 	Describe("Resize", func() {
 		var skipped bool
@@ -421,6 +425,12 @@ var _ = Describe("Nodes", func() {
 			if err := waitForClusterSize(c, testContext.CloudConfig.NumNodes, 10*time.Minute); err != nil {
 				Failf("Couldn't restore the original cluster size: %v", err)
 			}
+			// Many e2e tests assume that the cluster is fully healthy before they start.  Wait until
+			// the cluster is restored to health.
+			By("waiting for system pods to successfully restart")
+
+			err := waitForPodsRunningReady(api.NamespaceSystem, systemPodsNo, podReadyBeforeTimeout)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should be able to delete nodes", func() {

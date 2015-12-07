@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/dns.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/dns.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -52,8 +52,8 @@ supports forward lookups (A records) and service lookups (SRV records).
 
 ## How it Works
 
-The running DNS pod holds 3 containers - skydns, etcd (a private instance which skydns uses),
-and a Kubernetes-to-skydns bridge called kube2sky.  The kube2sky process
+The running DNS pod holds 4 containers - skydns, etcd (a private instance which skydns uses),
+a Kubernetes-to-skydns bridge called kube2sky, and a health check called healthz. The kube2sky process
 watches the Kubernetes master for changes in Services, and then writes the
 information to etcd, which skydns reads.  This etcd instance is not linked to
 any other etcd clusters that might exist, including the Kubernetes master.

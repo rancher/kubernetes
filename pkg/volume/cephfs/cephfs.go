@@ -151,6 +151,15 @@ type cephfsBuilder struct {
 
 var _ volume.Builder = &cephfsBuilder{}
 
+func (cephfsVolume *cephfsBuilder) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:                    cephfsVolume.readonly,
+		Managed:                     false,
+		SupportsOwnershipManagement: false,
+		SupportsSELinux:             false,
+	}
+}
+
 // SetUp attaches the disk and bind mounts to the volume path.
 func (cephfsVolume *cephfsBuilder) SetUp() error {
 	return cephfsVolume.SetUpAt(cephfsVolume.GetPath())
@@ -177,10 +186,6 @@ func (cephfsVolume *cephfsBuilder) SetUpAt(dir string) error {
 	cephfsVolume.cleanup(dir)
 	// return error
 	return err
-}
-
-func (cephfsVolume *cephfsBuilder) IsReadOnly() bool {
-	return cephfsVolume.readonly
 }
 
 type cephfsCleaner struct {

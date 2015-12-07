@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/user-guide/jobs.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/user-guide/jobs.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -70,13 +70,14 @@ It takes around 10s to complete.
 <!-- BEGIN MUNGE: EXAMPLE job.yaml -->
 
 ```yaml
-apiVersion: experimental/v1alpha1
+apiVersion: extensions/v1beta1
 kind: Job
 metadata:
   name: pi
 spec:
   selector:
-    app: pi
+    matchLabels:
+      app: pi
   template:
     metadata:
       name: pi
@@ -142,8 +143,8 @@ $ kubectl logs pi-aiw0a
 ## Writing a Job Spec
 
 As with all other Kubernetes config, a Job needs `apiVersion`, `kind`, and `metadata` fields.  For
-general information about working with config files, see [here](simple-yaml.md),
-[here](configuring-containers.md), and [here](working-with-resources.md).
+general information about working with config files, see [deploying applications](deploying-applications.md),
+[configuring containers](configuring-containers.md), and [working with resources](working-with-resources.md) documents.
 
 A Job also needs a [`.spec` section](../devel/api-conventions.md#spec-and-status).
 
@@ -162,11 +163,16 @@ Only a [`RestartPolicy`](pod-states.md) equal to `Never` or `OnFailure` are allo
 
 ### Pod Selector
 
-The `.spec.selector` field is a pod selector.  It works the same as the `.spec.selector` of
-a [ReplicationController](replication-controller.md).
+The `.spec.selector` field is a label query over a set of pods.
 
-If specified, the `.spec.template.metadata.labels` must be equal to the `.spec.selector`, or it will
-be rejected by the API.  If `.spec.selector` is unspecified, it will be defaulted to
+The `spec.selector` is an object consisting of two fields:
+* `matchLabels` - works the same as the `.spec.selector` of a [ReplicationController](replication-controller.md)
+* `matchExpressions` - allows to build more sophisticated selectors by specyfing key,
+  list of values and an operator that relates the key and values.
+
+When the two are specified the result is ANDed.
+
+If `.spec.selector` is unspecified, `.spec.selector.matchLabels` will be defaulted to
 `.spec.template.metadata.labels`.
 
 Also you should not normally create any pods whose labels match this selector, either directly,
@@ -241,9 +247,11 @@ value is `Always`.)
 
 ## Caveats
 
-Job is part of the experimental API group, so it is not subject to the same compatibility
-guarantees as objects in the main API.  It may not be enabled.  Enable by setting
-`--runtime-config=experimental/v1alpha1` on the apiserver.
+Job objects are in the [`extensions` API Group](../api.md#api-groups).
+
+Job objects have [API version `v1beta1`](../api.md#api-versioning).  Beta objects may
+undergo changes to their schema and/or semantics in future software releases, but
+similar functionality will be supported.
 
 ## Future work
 

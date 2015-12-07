@@ -36,12 +36,14 @@ import (
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apiserver/metrics"
 	"k8s.io/kubernetes/pkg/healthz"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/flushwriter"
+	"k8s.io/kubernetes/pkg/util/wsstream"
 	"k8s.io/kubernetes/pkg/version"
 
 	"github.com/emicklei/go-restful"
@@ -77,21 +79,19 @@ type Mux interface {
 type APIGroupVersion struct {
 	Storage map[string]rest.Storage
 
-	Root string
-	// TODO: caesarxuchao: Version actually contains "group/version", refactor it to avoid confusion.
-	Version string
+	Root         string
+	GroupVersion unversioned.GroupVersion
 
-	// APIRequestInfoResolver is used to parse URLs for the legacy proxy handler.  Don't use this for anything else
+	// RequestInfoResolver is used to parse URLs for the legacy proxy handler.  Don't use this for anything else
 	// TODO: refactor proxy handler to use sub resources
-	APIRequestInfoResolver *APIRequestInfoResolver
+	RequestInfoResolver *RequestInfoResolver
 
 	// ServerVersion controls the Kubernetes APIVersion used for common objects in the apiserver
 	// schema like api.Status, api.DeleteOptions, and api.ListOptions. Other implementors may
 	// define a version "v1beta1" but want to use the Kubernetes "v1" internal objects. If
 	// empty, defaults to Version.
-	// TODO: caesarxuchao: ServerVersion actually contains "group/version",
-	// refactor it to avoid confusion.
-	ServerVersion string
+	// TODO this seems suspicious.  Is this actually just "unversioned" now?
+	ServerGroupVersion *unversioned.GroupVersion
 
 	Mapper meta.RESTMapper
 
@@ -104,7 +104,6 @@ type APIGroupVersion struct {
 	Admit   admission.Interface
 	Context api.RequestContextMapper
 
-	ProxyDialerFn     ProxyDialerFunc
 	MinRequestTimeout time.Duration
 }
 
@@ -125,10 +124,9 @@ func (g *APIGroupVersion) InstallREST(container *restful.Container) error {
 	installer := g.newInstaller()
 	ws := installer.NewWebService()
 	apiResources, registrationErrors := installer.Install(ws)
-	// TODO: g.Version only contains "version" now, it will contain "group/version" in the near future.
-	AddSupportedResourcesWebService(ws, g.Version, apiResources)
+	AddSupportedResourcesWebService(ws, g.GroupVersion, apiResources)
 	container.Add(ws)
-	return errors.NewAggregate(registrationErrors)
+	return utilerrors.NewAggregate(registrationErrors)
 }
 
 // UpdateREST registers the REST handlers for this APIGroupVersion to an existing web service
@@ -150,20 +148,18 @@ func (g *APIGroupVersion) UpdateREST(container *restful.Container) error {
 		return apierrors.NewInternalError(fmt.Errorf("unable to find an existing webservice for prefix %s", installer.prefix))
 	}
 	apiResources, registrationErrors := installer.Install(ws)
-	// TODO: g.Version only contains "version" now, it will contain "group/version" in the near future.
-	AddSupportedResourcesWebService(ws, g.Version, apiResources)
-	return errors.NewAggregate(registrationErrors)
+	AddSupportedResourcesWebService(ws, g.GroupVersion, apiResources)
+	return utilerrors.NewAggregate(registrationErrors)
 }
 
 // newInstaller is a helper to create the installer.  Used by InstallREST and UpdateREST.
 func (g *APIGroupVersion) newInstaller() *APIInstaller {
-	prefix := path.Join(g.Root, g.Version)
+	prefix := path.Join(g.Root, g.GroupVersion.Group, g.GroupVersion.Version)
 	installer := &APIInstaller{
 		group:             g,
-		info:              g.APIRequestInfoResolver,
+		info:              g.RequestInfoResolver,
 		prefix:            prefix,
 		minRequestTimeout: g.MinRequestTimeout,
-		proxyDialerFn:     g.ProxyDialerFn,
 	}
 	return installer
 }
@@ -217,14 +213,14 @@ func logStackOnRecover(panicReason interface{}, httpWriter http.ResponseWriter) 
 	errorJSON(apierrors.NewGenericServerResponse(http.StatusInternalServerError, "", "", "", "", 0, false), latest.GroupOrDie("").Codec, httpWriter)
 }
 
-func InstallServiceErrorHandler(container *restful.Container, requestResolver *APIRequestInfoResolver, apiVersions []string) {
+func InstallServiceErrorHandler(container *restful.Container, requestResolver *RequestInfoResolver, apiVersions []string) {
 	container.ServiceErrorHandler(func(serviceErr restful.ServiceError, request *restful.Request, response *restful.Response) {
 		serviceErrorHandler(requestResolver, apiVersions, serviceErr, request, response)
 	})
 }
 
-func serviceErrorHandler(requestResolver *APIRequestInfoResolver, apiVersions []string, serviceErr restful.ServiceError, request *restful.Request, response *restful.Response) {
-	requestInfo, err := requestResolver.GetAPIRequestInfo(request.Request)
+func serviceErrorHandler(requestResolver *RequestInfoResolver, apiVersions []string, serviceErr restful.ServiceError, request *restful.Request, response *restful.Response) {
+	requestInfo, err := requestResolver.GetRequestInfo(request.Request)
 	codec := latest.GroupOrDie("").Codec
 	if err == nil && requestInfo.APIVersion != "" {
 		// check if the api version is valid.
@@ -257,7 +253,7 @@ func AddApiWebService(container *restful.Container, apiPrefix string, versions [
 }
 
 // Adds a service to return the supported api versions at /apis.
-func AddApisWebService(container *restful.Container, apiPrefix string, groups []api.APIGroup) {
+func AddApisWebService(container *restful.Container, apiPrefix string, groups []unversioned.APIGroup) {
 	rootAPIHandler := RootAPIHandler(groups)
 	ws := new(restful.WebService)
 	ws.Path(apiPrefix)
@@ -271,8 +267,8 @@ func AddApisWebService(container *restful.Container, apiPrefix string, groups []
 }
 
 // Adds a service to return the supported versions, preferred version, and name
-// of a group. E.g., a such web service will be registered at /apis/experimental.
-func AddGroupWebService(container *restful.Container, path string, group api.APIGroup) {
+// of a group. E.g., a such web service will be registered at /apis/extensions.
+func AddGroupWebService(container *restful.Container, path string, group unversioned.APIGroup) {
 	groupHandler := GroupHandler(group)
 	ws := new(restful.WebService)
 	ws.Path(path)
@@ -286,8 +282,8 @@ func AddGroupWebService(container *restful.Container, path string, group api.API
 }
 
 // Adds a service to return the supported resources, E.g., a such web service
-// will be registered at /apis/experimental/v1.
-func AddSupportedResourcesWebService(ws *restful.WebService, groupVersion string, apiResources []api.APIResource) {
+// will be registered at /apis/extensions/v1.
+func AddSupportedResourcesWebService(ws *restful.WebService, groupVersion unversioned.GroupVersion, apiResources []unversioned.APIResource) {
 	resourceHandler := SupportedResourcesHandler(groupVersion, apiResources)
 	ws.Route(ws.GET("/").To(resourceHandler).
 		Doc("get available resources").
@@ -306,32 +302,32 @@ func handleVersion(req *restful.Request, resp *restful.Response) {
 func APIVersionHandler(versions ...string) restful.RouteFunction {
 	return func(req *restful.Request, resp *restful.Response) {
 		// TODO: use restful's Response methods
-		writeRawJSON(http.StatusOK, api.APIVersions{Versions: versions}, resp.ResponseWriter)
+		writeJSON(http.StatusOK, api.Codec, &unversioned.APIVersions{Versions: versions}, resp.ResponseWriter, true)
 	}
 }
 
 // RootAPIHandler returns a handler which will list the provided groups and versions as available.
-func RootAPIHandler(groups []api.APIGroup) restful.RouteFunction {
+func RootAPIHandler(groups []unversioned.APIGroup) restful.RouteFunction {
 	return func(req *restful.Request, resp *restful.Response) {
 		// TODO: use restful's Response methods
-		writeRawJSON(http.StatusOK, api.APIGroupList{Groups: groups}, resp.ResponseWriter)
+		writeJSON(http.StatusOK, api.Codec, &unversioned.APIGroupList{Groups: groups}, resp.ResponseWriter, true)
 	}
 }
 
 // GroupHandler returns a handler which will return the api.GroupAndVersion of
 // the group.
-func GroupHandler(group api.APIGroup) restful.RouteFunction {
+func GroupHandler(group unversioned.APIGroup) restful.RouteFunction {
 	return func(req *restful.Request, resp *restful.Response) {
 		// TODO: use restful's Response methods
-		writeRawJSON(http.StatusOK, group, resp.ResponseWriter)
+		writeJSON(http.StatusOK, api.Codec, &group, resp.ResponseWriter, true)
 	}
 }
 
 // SupportedResourcesHandler returns a handler which will list the provided resources as available.
-func SupportedResourcesHandler(groupVersion string, apiResources []api.APIResource) restful.RouteFunction {
+func SupportedResourcesHandler(groupVersion unversioned.GroupVersion, apiResources []unversioned.APIResource) restful.RouteFunction {
 	return func(req *restful.Request, resp *restful.Response) {
 		// TODO: use restful's Response methods
-		writeRawJSON(http.StatusOK, api.APIResourceList{GroupVersion: groupVersion, APIResources: apiResources}, resp.ResponseWriter)
+		writeJSON(http.StatusOK, api.Codec, &unversioned.APIResourceList{GroupVersion: groupVersion.String(), APIResources: apiResources}, resp.ResponseWriter, true)
 	}
 }
 
@@ -353,6 +349,15 @@ func write(statusCode int, apiVersion string, codec runtime.Codec, object runtim
 			return
 		}
 		defer out.Close()
+
+		if wsstream.IsWebSocketRequest(req) {
+			r := wsstream.NewReader(out, true)
+			if err := r.Copy(w, req); err != nil {
+				util.HandleError(fmt.Errorf("error encountered while streaming results via websocket: %v", err))
+			}
+			return
+		}
+
 		if len(contentType) == 0 {
 			contentType = "application/octet-stream"
 		}

@@ -21,13 +21,12 @@ import (
 	"testing"
 	"time"
 
-	cadvisorApiV2 "github.com/google/cadvisor/info/v2"
+	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
 	"k8s.io/kubernetes/pkg/kubelet/container"
-	"k8s.io/kubernetes/pkg/types"
 )
 
 var zero time.Time
@@ -74,7 +73,7 @@ func makeImage(id int, size int64) container.Image {
 // Make a container with the specified ID. It will use the image with the same ID.
 func makeContainer(id int) *container.Container {
 	return &container.Container{
-		ID:    types.UID(fmt.Sprintf("container-%d", id)),
+		ID:    container.ContainerID{"test", fmt.Sprintf("container-%d", id)},
 		Image: imageName(id),
 	}
 }
@@ -85,7 +84,7 @@ func TestDetectImagesInitialDetect(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -115,7 +114,7 @@ func TestDetectImagesWithNewImage(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -160,7 +159,7 @@ func TestDetectImagesContainerStopped(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -176,7 +175,7 @@ func TestDetectImagesContainerStopped(t *testing.T) {
 	require.True(t, ok)
 
 	// Simulate container being stopped.
-	fakeRuntime.PodList = []*container.Pod{}
+	fakeRuntime.AllPodList = []*container.Pod{}
 	err = manager.detectImages(time.Now())
 	require.NoError(t, err)
 	assert.Equal(manager.imageRecordsLen(), 2)
@@ -196,7 +195,7 @@ func TestDetectImagesWithRemovedImages(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -222,7 +221,7 @@ func TestFreeSpaceImagesInUseContainersAreIgnored(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -243,7 +242,7 @@ func TestFreeSpaceRemoveByLeastRecentlyUsed(t *testing.T) {
 		makeImage(0, 1024),
 		makeImage(1, 2048),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(0),
@@ -254,7 +253,7 @@ func TestFreeSpaceRemoveByLeastRecentlyUsed(t *testing.T) {
 
 	// Make 1 be more recently used than 0.
 	require.NoError(t, manager.detectImages(zero))
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(1),
@@ -262,7 +261,7 @@ func TestFreeSpaceRemoveByLeastRecentlyUsed(t *testing.T) {
 		},
 	}
 	require.NoError(t, manager.detectImages(time.Now()))
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{},
 		},
@@ -282,7 +281,7 @@ func TestFreeSpaceTiesBrokenByDetectedTime(t *testing.T) {
 	fakeRuntime.ImageList = []container.Image{
 		makeImage(0, 1024),
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				makeContainer(0),
@@ -297,7 +296,7 @@ func TestFreeSpaceTiesBrokenByDetectedTime(t *testing.T) {
 		makeImage(1, 2048),
 	}
 	require.NoError(t, manager.detectImages(time.Now()))
-	fakeRuntime.PodList = []*container.Pod{}
+	fakeRuntime.AllPodList = []*container.Pod{}
 	require.NoError(t, manager.detectImages(time.Now()))
 	require.Equal(t, manager.imageRecordsLen(), 2)
 
@@ -318,11 +317,11 @@ func TestFreeSpaceImagesAlsoDoesLookupByRepoTags(t *testing.T) {
 			Size: 2048,
 		},
 	}
-	fakeRuntime.PodList = []*container.Pod{
+	fakeRuntime.AllPodList = []*container.Pod{
 		{
 			Containers: []*container.Container{
 				{
-					ID:    "c5678",
+					ID:    container.ContainerID{"test", "c5678"},
 					Image: "salad",
 				},
 			},
@@ -344,7 +343,7 @@ func TestGarbageCollectBelowLowThreshold(t *testing.T) {
 	manager, _, mockCadvisor := newRealImageManager(policy)
 
 	// Expect 40% usage.
-	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorApiV2.FsInfo{
+	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorapiv2.FsInfo{
 		Usage:    400,
 		Capacity: 1000,
 	}, nil)
@@ -359,7 +358,7 @@ func TestGarbageCollectCadvisorFailure(t *testing.T) {
 	}
 	manager, _, mockCadvisor := newRealImageManager(policy)
 
-	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorApiV2.FsInfo{}, fmt.Errorf("error"))
+	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorapiv2.FsInfo{}, fmt.Errorf("error"))
 	assert.NotNil(t, manager.GarbageCollect())
 }
 
@@ -371,7 +370,7 @@ func TestGarbageCollectBelowSuccess(t *testing.T) {
 	manager, fakeRuntime, mockCadvisor := newRealImageManager(policy)
 
 	// Expect 95% usage and most of it gets freed.
-	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorApiV2.FsInfo{
+	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorapiv2.FsInfo{
 		Usage:    950,
 		Capacity: 1000,
 	}, nil)
@@ -390,7 +389,7 @@ func TestGarbageCollectNotEnoughFreed(t *testing.T) {
 	manager, fakeRuntime, mockCadvisor := newRealImageManager(policy)
 
 	// Expect 95% usage and little of it gets freed.
-	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorApiV2.FsInfo{
+	mockCadvisor.On("DockerImagesFsInfo").Return(cadvisorapiv2.FsInfo{
 		Usage:    950,
 		Capacity: 1000,
 	}, nil)

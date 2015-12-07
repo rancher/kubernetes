@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -43,7 +44,7 @@ func TestCreate(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 	factory := NewConfigFactory(client, nil)
 	factory.Create()
 }
@@ -61,7 +62,7 @@ func TestCreateFromConfig(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 	factory := NewConfigFactory(client, nil)
 
 	// Pre-register some predicate and priority functions
@@ -103,7 +104,7 @@ func TestCreateFromEmptyConfig(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 	factory := NewConfigFactory(client, nil)
 
 	configData = []byte(`{}`)
@@ -132,14 +133,9 @@ func PriorityTwo(pod *api.Pod, podLister algorithm.PodLister, nodeLister algorit
 }
 
 func TestDefaultErrorFunc(t *testing.T) {
-	grace := int64(30)
 	testPod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "bar"},
-		Spec: api.PodSpec{
-			RestartPolicy:                 api.RestartPolicyAlways,
-			DNSPolicy:                     api.DNSClusterFirst,
-			TerminationGracePeriodSeconds: &grace,
-		},
+		Spec:       apitesting.DeepEqualSafePodSpec(),
 	}
 	handler := util.FakeHandler{
 		StatusCode:   200,
@@ -152,7 +148,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 	mux.Handle(testapi.Default.ResourcePath("pods", "bar", "foo"), &handler)
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	factory := NewConfigFactory(client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()}), nil)
+	factory := NewConfigFactory(client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()}), nil)
 	queue := cache.NewFIFO(cache.MetaNamespaceKeyFunc)
 	podBackoff := podBackoff{
 		perPodBackoff:   map[types.NamespacedName]*backoffEntry{},
@@ -235,7 +231,7 @@ func TestBind(t *testing.T) {
 		}
 		server := httptest.NewServer(&handler)
 		defer server.Close()
-		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
+		client := client.NewOrDie(&client.Config{Host: server.URL, GroupVersion: testapi.Default.GroupVersion()})
 		b := binder{client}
 
 		if err := b.Bind(item.binding); err != nil {

@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/user-guide/simple-nginx.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/user-guide/simple-nginx.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -59,10 +59,10 @@ You can also see the replication controller that was created:
 kubectl get rc
 ```
 
-To stop the two replicated containers, stop the replication controller:
+To stop the two replicated containers, delete the replication controller:
 
 ```bash
-kubectl stop rc my-nginx
+kubectl delete rc my-nginx
 ```
 
 ### Exposing your pods to the internet.
@@ -84,7 +84,7 @@ In order to access your nginx landing page, you also have to make sure that traf
 
 ### Next: Configuration files
 
-Most people will eventually want to use declarative configuration files for creating/modifying their applications.  A [simplified introduction](simple-yaml.md)
+Most people will eventually want to use declarative configuration files for creating/modifying their applications.  A [simplified introduction](deploying-applications.md)
 is given in a different document.
 
 

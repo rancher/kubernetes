@@ -54,6 +54,13 @@ var (
 	KeyFunc = framework.DeletionHandlingMetaNamespaceKeyFunc
 )
 
+type ResyncPeriodFunc func() time.Duration
+
+// Returns 0 for resyncPeriod in case resyncing is not needed.
+func NoResyncPeriodFunc() time.Duration {
+	return 0
+}
+
 // Expectations are a way for controllers to tell the controller manager what they expect. eg:
 //	ControllerExpectations: {
 //		controller1: expects  2 adds in 2 minutes
@@ -301,11 +308,11 @@ func (r RealPodControl) createPods(nodeName, namespace string, template *api.Pod
 		return fmt.Errorf("unable to create pods, no labels")
 	}
 	if newPod, err := r.KubeClient.Pods(namespace).Create(pod); err != nil {
-		r.Recorder.Eventf(object, "FailedCreate", "Error creating: %v", err)
+		r.Recorder.Eventf(object, api.EventTypeWarning, "FailedCreate", "Error creating: %v", err)
 		return fmt.Errorf("unable to create pods: %v", err)
 	} else {
 		glog.V(4).Infof("Controller %v created pod %v", meta.Name, newPod.Name)
-		r.Recorder.Eventf(object, "SuccessfulCreate", "Created pod: %v", newPod.Name)
+		r.Recorder.Eventf(object, api.EventTypeNormal, "SuccessfulCreate", "Created pod: %v", newPod.Name)
 	}
 	return nil
 }

@@ -22,7 +22,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 )
@@ -33,7 +33,7 @@ func getDeploymentsResoureName() string {
 
 func TestDeploymentCreate(t *testing.T) {
 	ns := api.NamespaceDefault
-	deployment := experimental.Deployment{
+	deployment := extensions.Deployment{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "abc",
 			Namespace: ns,
@@ -42,7 +42,7 @@ func TestDeploymentCreate(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "POST",
-			Path:   testapi.Experimental.ResourcePath(getDeploymentsResoureName(), ns, ""),
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, ""),
 			Query:  buildQueryValues(nil),
 			Body:   &deployment,
 		},
@@ -58,7 +58,7 @@ func TestDeploymentCreate(t *testing.T) {
 
 func TestDeploymentGet(t *testing.T) {
 	ns := api.NamespaceDefault
-	deployment := &experimental.Deployment{
+	deployment := &extensions.Deployment{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "abc",
 			Namespace: ns,
@@ -67,7 +67,7 @@ func TestDeploymentGet(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   testapi.Experimental.ResourcePath(getDeploymentsResoureName(), ns, "abc"),
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, "abc"),
 			Query:  buildQueryValues(nil),
 			Body:   nil,
 		},
@@ -80,8 +80,8 @@ func TestDeploymentGet(t *testing.T) {
 
 func TestDeploymentList(t *testing.T) {
 	ns := api.NamespaceDefault
-	deploymentList := &experimental.DeploymentList{
-		Items: []experimental.Deployment{
+	deploymentList := &extensions.DeploymentList{
+		Items: []extensions.Deployment{
 			{
 				ObjectMeta: api.ObjectMeta{
 					Name:      "foo",
@@ -93,7 +93,7 @@ func TestDeploymentList(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   testapi.Experimental.ResourcePath(getDeploymentsResoureName(), ns, ""),
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, ""),
 			Query:  buildQueryValues(nil),
 			Body:   nil,
 		},
@@ -105,7 +105,7 @@ func TestDeploymentList(t *testing.T) {
 
 func TestDeploymentUpdate(t *testing.T) {
 	ns := api.NamespaceDefault
-	deployment := &experimental.Deployment{
+	deployment := &extensions.Deployment{
 		ObjectMeta: api.ObjectMeta{
 			Name:            "abc",
 			Namespace:       ns,
@@ -115,7 +115,7 @@ func TestDeploymentUpdate(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "PUT",
-			Path:   testapi.Experimental.ResourcePath(getDeploymentsResoureName(), ns, "abc"),
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, "abc"),
 			Query:  buildQueryValues(nil),
 		},
 		Response: Response{StatusCode: 200, Body: deployment},
@@ -124,12 +124,33 @@ func TestDeploymentUpdate(t *testing.T) {
 	c.Validate(t, response, err)
 }
 
+func TestDeploymentUpdateStatus(t *testing.T) {
+	ns := api.NamespaceDefault
+	deployment := &extensions.Deployment{
+		ObjectMeta: api.ObjectMeta{
+			Name:            "abc",
+			Namespace:       ns,
+			ResourceVersion: "1",
+		},
+	}
+	c := &testClient{
+		Request: testRequest{
+			Method: "PUT",
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, "abc") + "/status",
+			Query:  buildQueryValues(nil),
+		},
+		Response: Response{StatusCode: 200, Body: deployment},
+	}
+	response, err := c.Setup(t).Deployments(ns).UpdateStatus(deployment)
+	c.Validate(t, response, err)
+}
+
 func TestDeploymentDelete(t *testing.T) {
 	ns := api.NamespaceDefault
 	c := &testClient{
 		Request: testRequest{
 			Method: "DELETE",
-			Path:   testapi.Experimental.ResourcePath(getDeploymentsResoureName(), ns, "foo"),
+			Path:   testapi.Extensions.ResourcePath(getDeploymentsResoureName(), ns, "foo"),
 			Query:  buildQueryValues(nil),
 		},
 		Response: Response{StatusCode: 200},
@@ -142,11 +163,11 @@ func TestDeploymentWatch(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   testapi.Experimental.ResourcePathWithPrefix("watch", getDeploymentsResoureName(), "", ""),
+			Path:   testapi.Extensions.ResourcePathWithPrefix("watch", getDeploymentsResoureName(), "", ""),
 			Query:  url.Values{"resourceVersion": []string{}},
 		},
 		Response: Response{StatusCode: 200},
 	}
-	_, err := c.Setup(t).Deployments(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), "")
+	_, err := c.Setup(t).Deployments(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), api.ListOptions{})
 	c.Validate(t, nil, err)
 }

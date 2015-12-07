@@ -28,19 +28,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evanphx/json-patch"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	"k8s.io/kubernetes/pkg/kubectl"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/runtime"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 
+	"github.com/evanphx/json-patch"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+)
+
+const (
+	ApplyAnnotationsFlag = "save-config"
 )
 
 type debugError interface {
@@ -206,7 +211,7 @@ func messageForError(err error) string {
 
 func UsageError(cmd *cobra.Command, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
-	return fmt.Errorf("%s\nsee '%s -h' for help.", msg, cmd.CommandPath())
+	return fmt.Errorf("%s\nSee '%s -h' for help and examples.", msg, cmd.CommandPath())
 }
 
 func getFlag(cmd *cobra.Command, flag string) *pflag.Flag {
@@ -280,6 +285,10 @@ func GetFlagDuration(cmd *cobra.Command, flag string) time.Duration {
 func AddValidateFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("validate", true, "If true, use a schema to validate the input before sending it")
 	cmd.Flags().String("schema-cache-dir", fmt.Sprintf("~/%s/%s", clientcmd.RecommendedHomeDir, clientcmd.RecommendedSchemaName), fmt.Sprintf("If non-empty, load/store cached API schemas in this directory, default is '$HOME/%s/%s'", clientcmd.RecommendedHomeDir, clientcmd.RecommendedSchemaName))
+}
+
+func AddApplyAnnotationFlags(cmd *cobra.Command) {
+	cmd.Flags().Bool(ApplyAnnotationsFlag, false, "If true, the configuration of current object will be saved in its annotation. This is useful when you want to perform kubectl apply on this object in the future.")
 }
 
 func ReadConfigDataFromReader(reader io.Reader, source string) ([]byte, error) {
@@ -404,18 +413,18 @@ func DumpReaderToFile(reader io.Reader, filename string) error {
 func UpdateObject(info *resource.Info, updateFn func(runtime.Object) error) (runtime.Object, error) {
 	helper := resource.NewHelper(info.Client, info.Mapping)
 
-	err := updateFn(info.Object)
-	if err != nil {
-		return nil, err
-	}
-	data, err := helper.Codec.Encode(info.Object)
-	if err != nil {
+	if err := updateFn(info.Object); err != nil {
 		return nil, err
 	}
 
-	_, err = helper.Replace(info.Namespace, info.Name, true, data)
-	if err != nil {
+	// Update the annotation used by kubectl apply
+	if err := kubectl.UpdateApplyAnnotation(info); err != nil {
 		return nil, err
 	}
+
+	if _, err := helper.Replace(info.Namespace, info.Name, true, info.Object); err != nil {
+		return nil, err
+	}
+
 	return info.Object, nil
 }

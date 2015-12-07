@@ -56,7 +56,7 @@
     ]
    },
    {
-    "path": "/api/v1/namespaces/{namespace}/componentstatuses",
+    "path": "/api/v1/componentstatuses",
     "description": "API at /api/v1",
     "operations": [
      {
@@ -106,11 +106,11 @@
         "allowMultiple": false
        },
        {
-        "type": "string",
-        "paramType": "path",
-        "name": "namespace",
-        "description": "object name and auth scope, such as for teams and projects",
-        "required": true,
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
         "allowMultiple": false
        }
       ],
@@ -131,7 +131,7 @@
     ]
    },
    {
-    "path": "/api/v1/namespaces/{namespace}/componentstatuses/{name}",
+    "path": "/api/v1/componentstatuses/{name}",
     "description": "API at /api/v1",
     "operations": [
      {
@@ -151,14 +151,6 @@
        {
         "type": "string",
         "paramType": "path",
-        "name": "namespace",
-        "description": "object name and auth scope, such as for teams and projects",
-        "required": true,
-        "allowMultiple": false
-       },
-       {
-        "type": "string",
-        "paramType": "path",
         "name": "name",
         "description": "name of the ComponentStatus",
         "required": true,
@@ -170,73 +162,6 @@
         "code": 200,
         "message": "OK",
         "responseModel": "v1.ComponentStatus"
-       }
-      ],
-      "produces": [
-       "application/json"
-      ],
-      "consumes": [
-       "*/*"
-      ]
-     }
-    ]
-   },
-   {
-    "path": "/api/v1/componentstatuses",
-    "description": "API at /api/v1",
-    "operations": [
-     {
-      "type": "v1.ComponentStatusList",
-      "method": "GET",
-      "summary": "list objects of kind ComponentStatus",
-      "nickname": "listComponentStatus",
-      "parameters": [
-       {
-        "type": "string",
-        "paramType": "query",
-        "name": "pretty",
-        "description": "If 'true', then the output is pretty printed.",
-        "required": false,
-        "allowMultiple": false
-       },
-       {
-        "type": "string",
-        "paramType": "query",
-        "name": "labelSelector",
-        "description": "A selector to restrict the list of returned objects by their labels. Defaults to everything.",
-        "required": false,
-        "allowMultiple": false
-       },
-       {
-        "type": "string",
-        "paramType": "query",
-        "name": "fieldSelector",
-        "description": "A selector to restrict the list of returned objects by their fields. Defaults to everything.",
-        "required": false,
-        "allowMultiple": false
-       },
-       {
-        "type": "boolean",
-        "paramType": "query",
-        "name": "watch",
-        "description": "Watch for changes to the described resources and return them as a stream of add, update, and remove notifications. Specify resourceVersion.",
-        "required": false,
-        "allowMultiple": false
-       },
-       {
-        "type": "string",
-        "paramType": "query",
-        "name": "resourceVersion",
-        "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
-        "required": false,
-        "allowMultiple": false
-       }
-      ],
-      "responseMessages": [
-       {
-        "code": 200,
-        "message": "OK",
-        "responseModel": "v1.ComponentStatusList"
        }
       ],
       "produces": [
@@ -295,6 +220,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -415,6 +348,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -560,7 +501,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -706,6 +647,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -787,6 +736,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -854,6 +811,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -919,6 +884,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -1039,6 +1012,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -1184,7 +1165,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -1330,6 +1311,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -1411,6 +1400,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -1478,6 +1475,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -1543,6 +1548,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -1663,6 +1676,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -1808,7 +1829,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -1954,6 +1975,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -2035,6 +2064,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -2102,6 +2139,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -2167,6 +2212,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -2271,6 +2324,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -2392,7 +2453,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -2518,6 +2579,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -2697,6 +2766,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -2799,6 +2876,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -2920,7 +3005,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -3046,6 +3131,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -3500,6 +3593,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -3616,6 +3717,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -3761,7 +3870,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -3907,6 +4016,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -3988,6 +4105,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -4053,6 +4178,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -4181,6 +4314,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -4283,6 +4424,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -4404,7 +4553,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -4530,6 +4679,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -4660,6 +4817,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -4776,6 +4941,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -4921,7 +5094,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -5063,6 +5236,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -5568,6 +5749,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -5633,6 +5822,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -6063,7 +6260,7 @@
         "allowMultiple": false
        },
        {
-        "type": "*int64",
+        "type": "integer",
         "paramType": "query",
         "name": "sinceSeconds",
         "description": "A relative time in seconds before the current time from which to show logs. If this value precedes the time a pod was started, only logs since the pod start will be returned. If this value is in the future, no logs will be returned. Only one of sinceSeconds or sinceTime may be specified.",
@@ -6071,7 +6268,7 @@
         "allowMultiple": false
        },
        {
-        "type": "*unversioned.Time",
+        "type": "string",
         "paramType": "query",
         "name": "sinceTime",
         "description": "An RFC3339 timestamp from which to show logs. If this value preceeds the time a pod was started, only logs since the pod start will be returned. If this value is in the future, no logs will be returned. Only one of sinceSeconds or sinceTime may be specified.",
@@ -6087,7 +6284,7 @@
         "allowMultiple": false
        },
        {
-        "type": "*int64",
+        "type": "integer",
         "paramType": "query",
         "name": "tailLines",
         "description": "If set, the number of lines from the end of the logs to show. If not specified, logs are shown from the creation of the container or sinceSeconds or sinceTime",
@@ -6095,7 +6292,7 @@
         "allowMultiple": false
        },
        {
-        "type": "*int64",
+        "type": "integer",
         "paramType": "query",
         "name": "limitBytes",
         "description": "If set, the number of bytes to read from the server before terminating the log output. This may not display a complete final line of logging, and may return slightly more or slightly less than the specified limit.",
@@ -6827,6 +7024,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -6943,6 +7148,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -7088,7 +7301,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -7234,6 +7447,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -7315,6 +7536,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -7382,6 +7611,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -7447,6 +7684,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -7567,6 +7812,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -7712,7 +7965,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -7858,6 +8111,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -7939,6 +8200,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -8006,6 +8275,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -8013,6 +8290,65 @@
         "code": 200,
         "message": "OK",
         "responseModel": "json.WatchEvent"
+       }
+      ],
+      "produces": [
+       "application/json"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     }
+    ]
+   },
+   {
+    "path": "/api/v1/namespaces/{namespace}/replicationcontrollers/{name}/status",
+    "description": "API at /api/v1",
+    "operations": [
+     {
+      "type": "v1.ReplicationController",
+      "method": "PUT",
+      "summary": "replace status of the specified ReplicationController",
+      "nickname": "replaceNamespacedReplicationControllerStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "v1.ReplicationController",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the ReplicationController",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.ReplicationController"
        }
       ],
       "produces": [
@@ -8071,6 +8407,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -8191,6 +8535,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -8336,7 +8688,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -8482,6 +8834,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -8563,6 +8923,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -8628,6 +8996,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -8758,6 +9134,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -8874,6 +9258,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -9019,7 +9411,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -9165,6 +9557,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -9246,6 +9646,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -9313,6 +9721,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -9378,6 +9794,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -9498,6 +9922,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -9643,7 +10075,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -9789,6 +10221,14 @@
         "allowMultiple": false
        },
        {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -9870,6 +10310,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -9937,6 +10385,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -10002,6 +10458,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -10122,6 +10586,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -10267,7 +10739,7 @@
         "allowMultiple": false
        },
        {
-        "type": "api.Patch",
+        "type": "unversioned.Patch",
         "paramType": "body",
         "name": "body",
         "description": "",
@@ -10401,6 +10873,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        },
@@ -10906,6 +11386,14 @@
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
         "required": false,
         "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
+        "required": false,
+        "allowMultiple": false
        }
       ],
       "responseMessages": [
@@ -10971,6 +11459,14 @@
         "paramType": "query",
         "name": "resourceVersion",
         "description": "When specified with a watch call, shows changes that occur after that particular version of a resource. Defaults to changes from the beginning of history.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "integer",
+        "paramType": "query",
+        "name": "timeoutSeconds",
+        "description": "Timeout for the list/watch call.",
         "required": false,
         "allowMultiple": false
        }
@@ -11355,8 +11851,9 @@
      }
     }
    },
-   "api.Patch": {
-    "id": "api.Patch",
+   "unversioned.Patch": {
+    "id": "unversioned.Patch",
+    "description": "Patch is provided to give a concrete name and type to the Kubernetes PATCH request body.",
     "properties": {}
    },
    "unversioned.Status": {
@@ -11540,6 +12037,10 @@
       "type": "integer",
       "format": "int32",
       "description": "The number of times this event has occurred."
+     },
+     "type": {
+      "type": "string",
+      "description": "Type of this event (Normal, Warning), new types could be added in the future"
      }
     }
    },
@@ -12646,6 +13147,10 @@
       "type": "boolean",
       "description": "Use the host's ipc namespace. Optional: Default to false."
      },
+     "securityContext": {
+      "$ref": "v1.PodSecurityContext",
+      "description": "SecurityContext holds pod-level security attributes and common container settings. Optional: Defaults to empty.  See type description for default values of each field."
+     },
      "imagePullSecrets": {
       "type": "array",
       "items": {
@@ -12922,7 +13427,11 @@
      },
      "stdin": {
       "type": "boolean",
-      "description": "Whether this container should allocate a buffer for stdin in the container runtime. Default is false."
+      "description": "Whether this container should allocate a buffer for stdin in the container runtime. If this is not set, reads from stdin in the container will always result in EOF. Default is false."
+     },
+     "stdinOnce": {
+      "type": "boolean",
+      "description": "Whether the container runtime should close the stdin channel after it has been opened by a single attach. When stdin is true the stdin stream will remain open across multiple attach sessions. If stdinOnce is set to true, stdin is opened on container start, is empty until the first client attaches to stdin, and then remains open and accepts data until the client disconnects, at which time stdin is closed and remains closed until the container is restarted. If this flag is false, a container processes that reads from stdin will never receive an EOF. Default is false"
      },
      "tty": {
       "type": "boolean",
@@ -13019,7 +13528,7 @@
    },
    "v1.Probe": {
     "id": "v1.Probe",
-    "description": "Probe describes a liveness probe to be examined to the container.",
+    "description": "Probe describes a health check to be performed against a container to determine whether it is alive or ready to receive traffic.",
     "properties": {
      "exec": {
       "$ref": "v1.ExecAction",
@@ -13041,7 +13550,22 @@
      "timeoutSeconds": {
       "type": "integer",
       "format": "int64",
-      "description": "Number of seconds after which liveness probes timeout. Defaults to 1 second. More info: http://releases.k8s.io/HEAD/docs/user-guide/pod-states.md#container-probes"
+      "description": "Number of seconds after which the probe times out. Defaults to 1 second. Minimum value is 1. More info: http://releases.k8s.io/HEAD/docs/user-guide/pod-states.md#container-probes"
+     },
+     "periodSeconds": {
+      "type": "integer",
+      "format": "int64",
+      "description": "How often (in seconds) to perform the probe. Default to 10 seconds. Minimum value is 1."
+     },
+     "successThreshold": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Minimum consecutive successes for the probe to be considered successful after having failed. Defaults to 1. Must be 1 for liveness. Minimum value is 1."
+     },
+     "failureThreshold": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Defaults to 3. Minimum value is 1."
      }
     }
    },
@@ -13130,28 +13654,28 @@
    },
    "v1.SecurityContext": {
     "id": "v1.SecurityContext",
-    "description": "SecurityContext holds security configuration that will be applied to a container.",
+    "description": "SecurityContext holds security configuration that will be applied to a container. Some fields are present in both SecurityContext and PodSecurityContext.  When both are set, the values in SecurityContext take precedence.",
     "properties": {
      "capabilities": {
       "$ref": "v1.Capabilities",
-      "description": "The linux kernel capabilites that should be added or removed. Default to Container.Capabilities if left unset. More info: http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"
+      "description": "The capabilities to add/drop when running containers. Defaults to the default set of capabilities granted by the container runtime."
      },
      "privileged": {
       "type": "boolean",
-      "description": "Run the container in privileged mode. Default to Container.Privileged if left unset. More info: http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"
+      "description": "Run container in privileged mode. Processes in privileged containers are essentially equivalent to root on the host. Defaults to false."
      },
      "seLinuxOptions": {
       "$ref": "v1.SELinuxOptions",
-      "description": "SELinuxOptions are the labels to be applied to the container and volumes. Options that control the SELinux labels applied. More info: http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"
+      "description": "The SELinux context to be applied to the container. If unspecified, the container runtime will allocate a random SELinux context for each container.  May also be set in PodSecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence."
      },
      "runAsUser": {
       "type": "integer",
       "format": "int64",
-      "description": "RunAsUser is the UID to run the entrypoint of the container process. The user id that runs the first process in the container. More info: http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"
+      "description": "The UID to run the entrypoint of the container process. Defaults to user specified in image metadata if unspecified. May also be set in PodSecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence."
      },
      "runAsNonRoot": {
       "type": "boolean",
-      "description": "RunAsNonRoot indicates that the container should be run as a non-root user. If the RunAsUser field is not explicitly set then the kubelet may check the image for a specified user or perform defaulting to specify a user."
+      "description": "Indicates that the container must run as a non-root user. If true, the Kubelet will validate the image at runtime to ensure that it does not run as UID 0 (root) and fail to start the container if it does. If unset or false, no such validation will be performed. May also be set in PodSecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence."
      }
     }
    },
@@ -13185,21 +13709,56 @@
     "properties": {
      "user": {
       "type": "string",
-      "description": "User is a SELinux user label that applies to the container. More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md"
+      "description": "User is a SELinux user label that applies to the container."
      },
      "role": {
       "type": "string",
-      "description": "Role is a SELinux role label that applies to the container. More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md"
+      "description": "Role is a SELinux role label that applies to the container."
      },
      "type": {
       "type": "string",
-      "description": "Type is a SELinux type label that applies to the container. More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md"
+      "description": "Type is a SELinux type label that applies to the container."
      },
      "level": {
       "type": "string",
-      "description": "Level is SELinux level label that applies to the container. More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md"
+      "description": "Level is SELinux level label that applies to the container."
      }
     }
+   },
+   "v1.PodSecurityContext": {
+    "id": "v1.PodSecurityContext",
+    "description": "PodSecurityContext holds pod-level security attributes and common container settings. Some fields are also present in container.securityContext.  Field values of container.securityContext take precedence over field values of PodSecurityContext.",
+    "properties": {
+     "seLinuxOptions": {
+      "$ref": "v1.SELinuxOptions",
+      "description": "The SELinux context to be applied to all containers. If unspecified, the container runtime will allocate a random SELinux context for each container.  May also be set in SecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence for that container."
+     },
+     "runAsUser": {
+      "type": "integer",
+      "format": "int64",
+      "description": "The UID to run the entrypoint of the container process. Defaults to user specified in image metadata if unspecified. May also be set in SecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence for that container."
+     },
+     "runAsNonRoot": {
+      "type": "boolean",
+      "description": "Indicates that the container must run as a non-root user. If true, the Kubelet will validate the image at runtime to ensure that it does not run as UID 0 (root) and fail to start the container if it does. If unset or false, no such validation will be performed. May also be set in SecurityContext.  If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence."
+     },
+     "supplementalGroups": {
+      "type": "array",
+      "items": {
+       "$ref": "integer"
+      },
+      "description": "A list of groups applied to the first process run in each container, in addition to the container's primary GID.  If unspecified, no groups will be added to any container."
+     },
+     "fsGroup": {
+      "type": "integer",
+      "format": "int64",
+      "description": "A special supplemental group that applies to all containers in a pod. Some volume types allow the Kubelet to change the ownership of that volume to be owned by the pod:\n\n1. The owning GID will be the FSGroup 2. The setgid bit is set (new files created in the volume will be owned by FSGroup) 3. The permission bits are OR'd with rw-rw "
+     }
+    }
+   },
+   "integer": {
+    "id": "integer",
+    "properties": {}
    },
    "v1.PodStatus": {
     "id": "v1.PodStatus",

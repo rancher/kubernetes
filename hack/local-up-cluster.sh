@@ -90,6 +90,7 @@ CONTAINER_RUNTIME=${CONTAINER_RUNTIME:-"docker"}
 RKT_PATH=${RKT_PATH:-""}
 RKT_STAGE1_IMAGE=${RKT_STAGE1_IMAGE:-""}
 CHAOS_CHANCE=${CHAOS_CHANCE:-0.0}
+CPU_CFS_QUOTA=${CPU_CFS_QUOTA:-false}
 
 function test_apiserver_off {
     # For the common local scenario, fail fast if server is already running.
@@ -203,11 +204,10 @@ function set_service_accounts {
 function start_apiserver {
     # Admission Controllers to invoke prior to persisting objects in cluster
     if [[ -z "${ALLOW_SECURITY_CONTEXT}" ]]; then
-      ADMISSION_CONTROL=NamespaceLifecycle,NamespaceAutoProvision,LimitRanger,SecurityContextDeny,ServiceAccount,DenyEscalatingExec,ResourceQuota
+      ADMISSION_CONTROL=NamespaceLifecycle,NamespaceAutoProvision,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota
     else
-      ADMISSION_CONTROL=NamespaceLifecycle,NamespaceAutoProvision,LimitRanger,ServiceAccount,DenyEscalatingExec,ResourceQuota
+      ADMISSION_CONTROL=NamespaceLifecycle,NamespaceAutoProvision,LimitRanger,ServiceAccount,ResourceQuota
     fi
-
     # This is the default dir and filename where the apiserver will generate a self-signed cert
     # which should be able to be used as the CA to verify itself
     CERT_DIR=/var/run/kubernetes
@@ -253,7 +253,22 @@ function start_controller_manager {
 
 function start_kubelet {
     KUBELET_LOG=/tmp/kubelet.log
+
+    mkdir -p /var/lib/kubelet
     if [[ -z "${DOCKERIZE_KUBELET}" ]]; then
+      # On selinux enabled systems, it might
+      # require to relabel /var/lib/kubelet
+      if which selinuxenabled &> /dev/null && \
+         selinuxenabled && \
+         which chcon > /dev/null ; then
+         if [[ ! $(ls -Zd /var/lib/kubelet) =~ system_u:object_r:svirt_sandbox_file_t:s0 ]] ; then
+            echo "Applying SELinux label to /var/lib/kubelet directory."
+            if ! chcon -R system_u:object_r:svirt_sandbox_file_t:s0 /var/lib/kubelet; then
+               echo "Failed to apply selinux label to /var/lib/kubelet."
+            fi
+	 fi
+      fi
+
       sudo -E "${GO_OUT}/kubelet" ${priv_arg}\
         --v=${LOG_LEVEL} \
         --chaos-chance="${CHAOS_CHANCE}" \
@@ -263,6 +278,7 @@ function start_kubelet {
         --hostname-override="127.0.0.1" \
         --address="127.0.0.1" \
         --api-servers="${API_HOST}:${API_PORT}" \
+        --cpu-cfs-quota=${CPU_CFS_QUOTA} \
         --port="$KUBELET_PORT" >"${KUBELET_LOG}" 2>&1 &
       KUBELET_PID=$!
     else
@@ -276,7 +292,7 @@ function start_kubelet {
         --volume=/var/run:/var/run:rw \
         --volume=/sys:/sys:ro \
         --volume=/var/lib/docker/:/var/lib/docker:ro \
-        --volume=/var/lib/kubelet/:/var/lib/kubelet:rw \
+        --volume=/var/lib/kubelet/:/var/lib/kubelet:rw,z \
         --net=host \
         --privileged=true \
         -i \

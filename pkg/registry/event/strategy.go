@@ -26,7 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 )
 
 type eventStrategy struct {
@@ -48,16 +48,20 @@ func (eventStrategy) PrepareForCreate(obj runtime.Object) {
 func (eventStrategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
-func (eventStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (eventStrategy) Validate(ctx api.Context, obj runtime.Object) utilvalidation.ErrorList {
 	event := obj.(*api.Event)
 	return validation.ValidateEvent(event)
+}
+
+// Canonicalize normalizes the object after validation.
+func (eventStrategy) Canonicalize(obj runtime.Object) {
 }
 
 func (eventStrategy) AllowCreateOnUpdate() bool {
 	return true
 }
 
-func (eventStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (eventStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) utilvalidation.ErrorList {
 	event := obj.(*api.Event)
 	return validation.ValidateEvent(event)
 }
@@ -79,8 +83,9 @@ func getAttrs(obj runtime.Object) (objLabels labels.Set, objFields fields.Set, e
 	if l == nil {
 		l = labels.Set{}
 	}
-	return l, fields.Set{
-		"metadata.name":                  event.Name,
+
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(event.ObjectMeta, true)
+	specificFieldsSet := fields.Set{
 		"involvedObject.kind":            event.InvolvedObject.Kind,
 		"involvedObject.namespace":       event.InvolvedObject.Namespace,
 		"involvedObject.name":            event.InvolvedObject.Name,
@@ -90,5 +95,6 @@ func getAttrs(obj runtime.Object) (objLabels labels.Set, objFields fields.Set, e
 		"involvedObject.fieldPath":       event.InvolvedObject.FieldPath,
 		"reason":                         event.Reason,
 		"source":                         event.Source.Component,
-	}, nil
+	}
+	return l, generic.MergeFieldsSets(objectMetaFieldsSet, specificFieldsSet), nil
 }

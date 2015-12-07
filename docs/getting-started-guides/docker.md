@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/docker.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/docker.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -35,7 +35,7 @@ Running Kubernetes locally via Docker
 
 **Table of Contents**
 
-- [Overview](#setting-up-a-cluster)
+- [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [Step One: Run etcd](#step-one-run-etcd)
 - [Step Two: Run the master](#step-two-run-the-master)
@@ -83,10 +83,13 @@ parameters as follows:
     swapaccount=1
     ```
 
+4. Decide what Kubernetes version to use.  Set the `${K8S_VERSION}` variable to
+   a value such as "1.1.1".
+
 ### Step One: Run etcd
 
 ```sh
-docker run --net=host -d gcr.io/google_containers/etcd:2.0.12 /usr/local/bin/etcd --addr=127.0.0.1:4001 --bind-addr=0.0.0.0:4001 --data-dir=/var/etcd/data
+docker run --net=host -d gcr.io/google_containers/etcd:2.2.1 /usr/local/bin/etcd --listen-client-urls=http://127.0.0.1:4001 --advertise-client-urls=http://127.0.0.1:4001 --data-dir=/var/etcd/data
 ```
 
 ### Step Two: Run the master
@@ -96,13 +99,14 @@ docker run \
     --volume=/:/rootfs:ro \
     --volume=/sys:/sys:ro \
     --volume=/dev:/dev \
-    --volume=/var/lib/docker/:/var/lib/docker:ro \
+    --volume=/var/lib/docker/:/var/lib/docker:rw \
     --volume=/var/lib/kubelet/:/var/lib/kubelet:rw \
     --volume=/var/run:/var/run:rw \
     --net=host \
+    --pid=host \
     --privileged=true \
     -d \
-    gcr.io/google_containers/hyperkube:v1.0.1 \
+    gcr.io/google_containers/hyperkube:v${K8S_VERSION} \
     /hyperkube kubelet --containerized --hostname-override="127.0.0.1" --address="0.0.0.0" --api-servers=http://localhost:8080 --config=/etc/kubernetes/manifests
 ```
 
@@ -111,22 +115,60 @@ This actually runs the kubelet, which in turn runs a [pod](../user-guide/pods.md
 ### Step Three: Run the service proxy
 
 ```sh
-docker run -d --net=host --privileged gcr.io/google_containers/hyperkube:v1.0.1 /hyperkube proxy --master=http://127.0.0.1:8080 --v=2
+docker run -d --net=host --privileged gcr.io/google_containers/hyperkube:v${K8S_VERSION} /hyperkube proxy --master=http://127.0.0.1:8080 --v=2
 ```
 
 ### Test it out
 
-At this point you should have a running Kubernetes cluster.  You can test this by downloading the kubectl
-binary
-([OS X](https://storage.googleapis.com/kubernetes-release/release/v1.0.1/bin/darwin/amd64/kubectl))
-([linux](https://storage.googleapis.com/kubernetes-release/release/v1.0.1/bin/linux/amd64/kubectl))
+At this point you should have a running Kubernetes cluster.  You can test this
+by downloading the kubectl binary for `${K8S_VERSION}` (look at the URL in the
+following links) and make it available by editing your PATH environment
+variable.
+([OS X](http://storage.googleapis.com/kubernetes-release/release/v1.1.1/bin/darwin/amd64/kubectl))
+([linux](http://storage.googleapis.com/kubernetes-release/release/v1.1.1/bin/linux/amd64/kubectl))
 
-*Note:*
-On OS/X you will need to set up port forwarding via ssh:
+For example, OS X:
+
+```console
+$ wget http://storage.googleapis.com/kubernetes-release/release/v${K8S_VERSION}/bin/darwin/amd64/kubectl
+$ chmod 755 kubectl
+$ PATH=$PATH:`pwd`
+```
+
+Linux:
+
+```console
+$ wget http://storage.googleapis.com/kubernetes-release/release/v${K8S_VERSION}/bin/linux/amd64/kubectl
+$ chmod 755 kubectl
+$ PATH=$PATH:`pwd`
+```
+
+<hr>
+
+**Note for OS/X users:**
+You will need to set up port forwarding via ssh. For users still using boot2docker directly, it is enough to run the command:
 
 ```sh
 boot2docker ssh -L8080:localhost:8080
 ```
+
+Since the recent deprecation of boot2docker/osx-installer, the correct way to solve the problem is to issue
+
+```sh
+docker-machine ssh default -L 8080:localhost:8080
+```
+
+However, this solution works only from docker-machine version 0.5. For older versions of docker-machine, a workaround is the
+following:
+
+```sh
+docker-machine env default
+ssh -f -T -N -L8080:localhost:8080 -l docker $(echo $DOCKER_HOST | cut -d ':' -f 2 | tr -d '/')
+```
+
+Type `tcuser` as the password.
+
+<hr>
 
 List the nodes in your cluster by running:
 
@@ -137,8 +179,8 @@ kubectl get nodes
 This should print:
 
 ```console
-NAME        LABELS    STATUS
-127.0.0.1   <none>    Ready
+NAME        LABELS                             STATUS
+127.0.0.1   kubernetes.io/hostname=127.0.0.1   Ready
 ```
 
 If you are running different Kubernetes clusters, you may need to specify `-s http://localhost:8080` to select the local cluster.
@@ -157,23 +199,22 @@ Now run `docker ps` you should see nginx running.  You may need to wait a few mi
 kubectl expose rc nginx --port=80
 ```
 
-This should print:
-
-```console
-NAME              CLUSTER_IP       EXTERNAL_IP       PORT(S)       SELECTOR               AGE
-nginx             10.0.93.211      <none>            80/TCP        run=nginx              1h
-```
-
-If `CLUSTER_IP` is blank run the following command to obtain it. Know issue [#10836](https://github.com/kubernetes/kubernetes/issues/10836)
+Run the following command to obtain the IP of this service we just created. There are two IPs, the first one is internal (CLUSTER_IP), and the second one is the external load-balanced IP.
 
 ```sh
 kubectl get svc nginx
 ```
 
-Hit the webserver:
+Alternatively, you can obtain only the first IP (CLUSTER_IP) by running:
 
 ```sh
-curl <insert-ip-from-above-here>
+kubectl get svc nginx --template={{.spec.clusterIP}}
+```
+
+Hit the webserver with the first IP (CLUSTER_IP):
+
+```sh
+curl <insert-cluster-ip-here>
 ```
 
 Note that you will need run this curl command on your boot2docker VM if you are running on OS X.

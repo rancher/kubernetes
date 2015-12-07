@@ -29,8 +29,9 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	"k8s.io/kubernetes/pkg/util/validation"
 )
 
 func TestMerge(t *testing.T) {
@@ -54,11 +55,7 @@ func TestMerge(t *testing.T) {
 				ObjectMeta: api.ObjectMeta{
 					Name: "foo",
 				},
-				Spec: api.PodSpec{
-					RestartPolicy:                 api.RestartPolicyAlways,
-					DNSPolicy:                     api.DNSClusterFirst,
-					TerminationGracePeriodSeconds: &grace,
-				},
+				Spec: apitesting.DeepEqualSafePodSpec(),
 			},
 		},
 		/* TODO: uncomment this test once Merge is updated to use
@@ -127,6 +124,7 @@ func TestMerge(t *testing.T) {
 					RestartPolicy:                 api.RestartPolicyAlways,
 					DNSPolicy:                     api.DNSClusterFirst,
 					TerminationGracePeriodSeconds: &grace,
+					SecurityContext:               &api.PodSecurityContext{},
 				},
 			},
 		},
@@ -276,15 +274,15 @@ func TestCheckInvalidErr(t *testing.T) {
 		expected string
 	}{
 		{
-			errors.NewInvalid("Invalid1", "invalidation", fielderrors.ValidationErrorList{fielderrors.NewFieldInvalid("Cause", "single", "details")}),
+			errors.NewInvalid("Invalid1", "invalidation", validation.ErrorList{validation.NewInvalidError("Cause", "single", "details")}),
 			`Error from server: Invalid1 "invalidation" is invalid: Cause: invalid value 'single', Details: details`,
 		},
 		{
-			errors.NewInvalid("Invalid2", "invalidation", fielderrors.ValidationErrorList{fielderrors.NewFieldInvalid("Cause", "multi1", "details"), fielderrors.NewFieldInvalid("Cause", "multi2", "details")}),
+			errors.NewInvalid("Invalid2", "invalidation", validation.ErrorList{validation.NewInvalidError("Cause", "multi1", "details"), validation.NewInvalidError("Cause", "multi2", "details")}),
 			`Error from server: Invalid2 "invalidation" is invalid: [Cause: invalid value 'multi1', Details: details, Cause: invalid value 'multi2', Details: details]`,
 		},
 		{
-			errors.NewInvalid("Invalid3", "invalidation", fielderrors.ValidationErrorList{}),
+			errors.NewInvalid("Invalid3", "invalidation", validation.ErrorList{}),
 			`Error from server: Invalid3 "invalidation" is invalid: <nil>`,
 		},
 	}

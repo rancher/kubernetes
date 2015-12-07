@@ -29,16 +29,17 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/apis/experimental"
-	expValidation "k8s.io/kubernetes/pkg/apis/experimental/validation"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	expvalidation "k8s.io/kubernetes/pkg/apis/extensions/validation"
 	"k8s.io/kubernetes/pkg/capabilities"
 	"k8s.io/kubernetes/pkg/runtime"
+	utilvalidation "k8s.io/kubernetes/pkg/util/validation"
 	"k8s.io/kubernetes/pkg/util/yaml"
 	schedulerapi "k8s.io/kubernetes/plugin/pkg/scheduler/api"
 	schedulerapilatest "k8s.io/kubernetes/plugin/pkg/scheduler/api/latest"
 )
 
-func validateObject(obj runtime.Object) (errors []error) {
+func validateObject(obj runtime.Object) (errors utilvalidation.ErrorList) {
 	switch t := obj.(type) {
 	case *api.ReplicationController:
 		if t.Namespace == "" {
@@ -101,23 +102,28 @@ func validateObject(obj runtime.Object) (errors []error) {
 			t.Namespace = api.NamespaceDefault
 		}
 		errors = validation.ValidateResourceQuota(t)
-	case *experimental.Deployment:
+	case *extensions.Deployment:
 		if t.Namespace == "" {
 			t.Namespace = api.NamespaceDefault
 		}
-		errors = expValidation.ValidateDeployment(t)
-	case *experimental.Job:
+		errors = expvalidation.ValidateDeployment(t)
+	case *extensions.Job:
 		if t.Namespace == "" {
 			t.Namespace = api.NamespaceDefault
 		}
-		errors = expValidation.ValidateJob(t)
-	case *experimental.DaemonSet:
+		errors = expvalidation.ValidateJob(t)
+	case *extensions.Ingress:
 		if t.Namespace == "" {
 			t.Namespace = api.NamespaceDefault
 		}
-		errors = expValidation.ValidateDaemonSet(t)
+		errors = expvalidation.ValidateIngress(t)
+	case *extensions.DaemonSet:
+		if t.Namespace == "" {
+			t.Namespace = api.NamespaceDefault
+		}
+		errors = expvalidation.ValidateDaemonSet(t)
 	default:
-		return []error{fmt.Errorf("no validation defined for %#v", obj)}
+		return utilvalidation.ErrorList{utilvalidation.NewInternalError("", fmt.Errorf("no validation defined for %#v", obj))}
 	}
 	return errors
 }
@@ -218,13 +224,15 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"http-liveness": &api.Pod{},
 		},
 		"../docs/user-guide": {
-			"multi-pod":   nil,
-			"pod":         &api.Pod{},
-			"replication": &api.ReplicationController{},
-			"job":         &experimental.Job{},
+			"multi-pod":            nil,
+			"pod":                  &api.Pod{},
+			"job":                  &extensions.Job{},
+			"ingress":              &extensions.Ingress{},
+			"nginx-deployment":     &extensions.Deployment{},
+			"new-nginx-deployment": &extensions.Deployment{},
 		},
 		"../docs/admin": {
-			"daemon": &experimental.DaemonSet{},
+			"daemon": &extensions.DaemonSet{},
 		},
 		"../examples": {
 			"scheduler-policy-config": &schedulerapi.Policy{},
@@ -300,9 +308,13 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"wordpress":         &api.Pod{},
 		},
 		"../examples/nfs": {
-			"nfs-server-pod":     &api.Pod{},
+			"nfs-busybox-rc":     &api.ReplicationController{},
+			"nfs-server-rc":      &api.ReplicationController{},
 			"nfs-server-service": &api.Service{},
-			"nfs-web-pod":        &api.Pod{},
+			"nfs-pv":             &api.PersistentVolume{},
+			"nfs-pvc":            &api.PersistentVolumeClaim{},
+			"nfs-web-rc":         &api.ReplicationController{},
+			"nfs-web-service":    &api.Service{},
 		},
 		"../docs/user-guide/node-selection": {
 			"pod": &api.Pod{},
@@ -344,10 +356,18 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"secret":     &api.Secret{},
 		},
 		"../examples/spark": {
+			"spark-master-controller": &api.ReplicationController{},
 			"spark-master-service":    &api.Service{},
-			"spark-master":            &api.Pod{},
+			"spark-webui":             &api.Service{},
 			"spark-worker-controller": &api.ReplicationController{},
-			"spark-driver":            &api.Pod{},
+			"zeppelin-controller":     &api.ReplicationController{},
+			"zeppelin-service":        &api.Service{},
+		},
+		"../examples/spark/spark-gluster": {
+			"spark-master-service":    &api.Service{},
+			"spark-master-controller": &api.ReplicationController{},
+			"spark-worker-controller": &api.ReplicationController{},
+			"glusterfs-endpoints":     &api.Endpoints{},
 		},
 		"../examples/storm": {
 			"storm-nimbus-service":    &api.Service{},
@@ -363,8 +383,12 @@ func TestExampleObjectSchemas(t *testing.T) {
 		"../examples/fibre_channel": {
 			"fc": &api.Pod{},
 		},
-		"../examples/experimental": {
-			"deployment": &experimental.Deployment{},
+		"../examples/extensions": {
+			"deployment": &extensions.Deployment{},
+		},
+		"../examples/javaweb-tomcat-sidecar": {
+			"javaweb":   &api.Pod{},
+			"javaweb-2": &api.Pod{},
 		},
 	}
 
@@ -441,7 +465,6 @@ func TestReadme(t *testing.T) {
 		{"../README.md", []runtime.Object{&api.Pod{}}},
 		{"../docs/user-guide/walkthrough/README.md", []runtime.Object{&api.Pod{}}},
 		{"../examples/iscsi/README.md", []runtime.Object{&api.Pod{}}},
-		{"../docs/user-guide/simple-yaml.md", []runtime.Object{&api.Pod{}, &api.ReplicationController{}}},
 	}
 
 	for _, path := range paths {
