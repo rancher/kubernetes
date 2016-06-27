@@ -22,13 +22,17 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/master"
+	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/genericapiserver"
+	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/storage"
+	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
 )
 
 func TestLongRunningRequestRegexp(t *testing.T) {
-	regexp := regexp.MustCompile(defaultLongRunningRequestRE)
+	regexp := regexp.MustCompile(options.NewAPIServer().LongRunningRequestRE)
 	dontMatch := []string{
 		"/api/v1/watch-namespace/",
 		"/api/v1/namespace-proxy/",
@@ -68,44 +72,11 @@ func TestLongRunningRequestRegexp(t *testing.T) {
 	}
 }
 
-func TestGenerateStorageVersionMap(t *testing.T) {
-	testCases := []struct {
-		legacyVersion   string
-		storageVersions string
-		expectedMap     map[string]string
-	}{
-		{
-			legacyVersion:   "v1",
-			storageVersions: "v1,experimental/v1alpha1",
-			expectedMap: map[string]string{
-				"":             "v1",
-				"experimental": "experimental/v1alpha1",
-			},
-		},
-		{
-			legacyVersion:   "",
-			storageVersions: "experimental/v1alpha1,v1",
-			expectedMap: map[string]string{
-				"":             "v1",
-				"experimental": "experimental/v1alpha1",
-			},
-		},
-		{
-			legacyVersion:   "",
-			storageVersions: "",
-			expectedMap:     map[string]string{},
-		},
-	}
-	for _, test := range testCases {
-		output := generateStorageVersionMap(test.legacyVersion, test.storageVersions)
-		if !reflect.DeepEqual(test.expectedMap, output) {
-			t.Errorf("unexpected error. expect: %v, got: %v", test.expectedMap, output)
-		}
-	}
-}
-
 func TestUpdateEtcdOverrides(t *testing.T) {
-	storageVersions := generateStorageVersionMap("", "v1,experimental/v1alpha1")
+	storageVersions := map[string]string{
+		"":           "v1",
+		"extensions": "extensions/v1beta1",
+	}
 
 	testCases := []struct {
 		apigroup string
@@ -113,32 +84,36 @@ func TestUpdateEtcdOverrides(t *testing.T) {
 		servers  []string
 	}{
 		{
-			apigroup: "",
+			apigroup: api.GroupName,
 			resource: "resource",
 			servers:  []string{"http://127.0.0.1:10000"},
 		},
 		{
-			apigroup: "",
+			apigroup: api.GroupName,
 			resource: "resource",
 			servers:  []string{"http://127.0.0.1:10000", "http://127.0.0.1:20000"},
 		},
 		{
-			apigroup: "experimental",
+			apigroup: extensions.GroupName,
 			resource: "resource",
 			servers:  []string{"http://127.0.0.1:10000"},
 		},
 	}
 
 	for _, test := range testCases {
-		newEtcd := func(_ string, serverList []string, _ meta.VersionInterfacesFunc, _, _ string) (storage.Interface, error) {
-			if !reflect.DeepEqual(test.servers, serverList) {
-				t.Errorf("unexpected server list, expected: %#v, got: %#v", test.servers, serverList)
+		newEtcd := func(_ runtime.NegotiatedSerializer, _, _ string, etcdConfig etcdstorage.EtcdConfig) (storage.Interface, error) {
+			if !reflect.DeepEqual(test.servers, etcdConfig.ServerList) {
+				t.Errorf("unexpected server list, expected: %#v, got: %#v", test.servers, etcdConfig.ServerList)
 			}
 			return nil, nil
 		}
-		storageDestinations := master.NewStorageDestinations()
+		storageDestinations := genericapiserver.NewStorageDestinations()
 		override := test.apigroup + "/" + test.resource + "#" + strings.Join(test.servers, ";")
-		updateEtcdOverrides([]string{override}, storageVersions, "", &storageDestinations, newEtcd)
+		defaultEtcdConfig := etcdstorage.EtcdConfig{
+			Prefix:     genericapiserver.DefaultEtcdPathPrefix,
+			ServerList: []string{"http://127.0.0.1"},
+		}
+		updateEtcdOverrides([]string{override}, storageVersions, defaultEtcdConfig, &storageDestinations, newEtcd)
 		apigroup, ok := storageDestinations.APIGroups[test.apigroup]
 		if !ok {
 			t.Errorf("apigroup: %s not created", test.apigroup)
@@ -153,4 +128,97 @@ func TestUpdateEtcdOverrides(t *testing.T) {
 			continue
 		}
 	}
+}
+
+func TestParseRuntimeConfig(t *testing.T) {
+	testCases := []struct {
+		runtimeConfig            map[string]string
+		apiGroupVersionOverrides map[string]genericapiserver.APIGroupVersionOverride
+		err                      bool
+	}{
+		{
+			runtimeConfig:            map[string]string{},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{},
+			err: false,
+		},
+		{
+			// Cannot override v1 resources.
+			runtimeConfig: map[string]string{
+				"api/v1/pods": "false",
+			},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{},
+			err: true,
+		},
+		{
+			// Disable v1.
+			runtimeConfig: map[string]string{
+				"api/v1": "false",
+			},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{
+				"api/v1": {
+					Disable: true,
+				},
+			},
+			err: false,
+		},
+		{
+			// Disable extensions.
+			runtimeConfig: map[string]string{
+				"extensions/v1beta1": "false",
+			},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{
+				"extensions/v1beta1": {
+					Disable: true,
+				},
+			},
+			err: false,
+		},
+		{
+			// Disable deployments.
+			runtimeConfig: map[string]string{
+				"extensions/v1beta1/deployments": "false",
+			},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{
+				"extensions/v1beta1": {
+					ResourceOverrides: map[string]bool{
+						"deployments": false,
+					},
+				},
+			},
+			err: false,
+		},
+		{
+			// Enable deployments and disable jobs.
+			runtimeConfig: map[string]string{
+				"extensions/v1beta1/deployments": "true",
+				"extensions/v1beta1/jobs":        "false",
+			},
+			apiGroupVersionOverrides: map[string]genericapiserver.APIGroupVersionOverride{
+				"extensions/v1beta1": {
+					ResourceOverrides: map[string]bool{
+						"deployments": true,
+						"jobs":        false,
+					},
+				},
+			},
+			err: false,
+		},
+	}
+	for _, test := range testCases {
+		s := &options.APIServer{
+			RuntimeConfig: test.runtimeConfig,
+		}
+		apiGroupVersionOverrides, err := parseRuntimeConfig(s)
+
+		if err == nil && test.err {
+			t.Fatalf("expected error for test: %q", test)
+		} else if err != nil && !test.err {
+			t.Fatalf("unexpected error: %s, for test: %q", err, test)
+		}
+
+		if err == nil && !reflect.DeepEqual(apiGroupVersionOverrides, test.apiGroupVersionOverrides) {
+			t.Fatalf("unexpected apiGroupVersionOverrides. Actual: %q, expected: %q", apiGroupVersionOverrides, test.apiGroupVersionOverrides)
+		}
+	}
+
 }

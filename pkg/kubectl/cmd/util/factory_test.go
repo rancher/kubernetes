@@ -32,6 +32,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/validation"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/client/unversioned/fake"
@@ -170,15 +171,15 @@ func TestLabelsForObject(t *testing.T) {
 func TestCanBeExposed(t *testing.T) {
 	factory := NewFactory(nil)
 	tests := []struct {
-		kind      string
+		kind      unversioned.GroupKind
 		expectErr bool
 	}{
 		{
-			kind:      "ReplicationController",
+			kind:      api.Kind("ReplicationController"),
 			expectErr: false,
 		},
 		{
-			kind:      "Node",
+			kind:      api.Kind("Node"),
 			expectErr: true,
 		},
 	}
@@ -207,12 +208,69 @@ func TestFlagUnderscoreRenaming(t *testing.T) {
 }
 
 func loadSchemaForTest() (validation.Schema, error) {
-	pathToSwaggerSpec := "../../../../api/swagger-spec/" + testapi.Default.Version() + ".json"
+	pathToSwaggerSpec := "../../../../api/swagger-spec/" + testapi.Default.GroupVersion().Version + ".json"
 	data, err := ioutil.ReadFile(pathToSwaggerSpec)
 	if err != nil {
 		return nil, err
 	}
 	return validation.NewSwaggerSchemaFromBytes(data)
+}
+
+func TestRefetchSchemaWhenValidationFails(t *testing.T) {
+	schema, err := loadSchemaForTest()
+	if err != nil {
+		t.Errorf("Error loading schema: %v", err)
+		t.FailNow()
+	}
+	output, err := json.Marshal(schema)
+	if err != nil {
+		t.Errorf("Error serializing schema: %v", err)
+		t.FailNow()
+	}
+	requests := map[string]int{}
+
+	c := &fake.RESTClient{
+		Codec: testapi.Default.Codec(),
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
+			switch p, m := req.URL.Path, req.Method; {
+			case strings.HasPrefix(p, "/swaggerapi") && m == "GET":
+				requests[p] = requests[p] + 1
+				return &http.Response{StatusCode: 200, Body: ioutil.NopCloser(bytes.NewBuffer(output))}, nil
+			default:
+				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
+				return nil, nil
+			}
+		}),
+	}
+	dir := os.TempDir() + "/schemaCache"
+	os.RemoveAll(dir)
+
+	fullDir, err := substituteUserHome(dir)
+	if err != nil {
+		t.Errorf("Error getting fullDir: %v", err)
+		t.FailNow()
+	}
+	cacheFile := path.Join(fullDir, "foo", "bar", schemaFileName)
+	err = writeSchemaFile(output, fullDir, cacheFile, "foo", "bar")
+	if err != nil {
+		t.Errorf("Error building old cache schema: %v", err)
+		t.FailNow()
+	}
+
+	obj := &extensions.Deployment{}
+	data, err := runtime.Encode(testapi.Extensions.Codec(), obj)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		t.FailNow()
+	}
+
+	// Re-get request, should use HTTP and write
+	if getSchemaAndValidate(c, data, "foo", "bar", dir); err != nil {
+		t.Errorf("unexpected error validating: %v", err)
+	}
+	if requests["/swaggerapi/foo/bar"] != 1 {
+		t.Errorf("expected 1 schema request, saw: %d", requests["/swaggerapi/foo/bar"])
+	}
 }
 
 func TestValidateCachesSchema(t *testing.T) {
@@ -230,7 +288,7 @@ func TestValidateCachesSchema(t *testing.T) {
 
 	c := &fake.RESTClient{
 		Codec: testapi.Default.Codec(),
-		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case strings.HasPrefix(p, "/swaggerapi") && m == "GET":
 				requests[p] = requests[p] + 1
@@ -245,7 +303,7 @@ func TestValidateCachesSchema(t *testing.T) {
 	os.RemoveAll(dir)
 
 	obj := &api.Pod{}
-	data, err := testapi.Default.Codec().Encode(obj)
+	data, err := runtime.Encode(testapi.Default.Codec(), obj)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		t.FailNow()
@@ -266,7 +324,7 @@ func TestValidateCachesSchema(t *testing.T) {
 	if getSchemaAndValidate(c, data, "foo", "bar", dir); err != nil {
 		t.Errorf("unexpected error validating: %v", err)
 	}
-	if requests["/swaggerapi/foo/bar"] != 1 {
+	if requests["/swaggerapi/foo/bar"] != 2 {
 		t.Errorf("expected 1 schema request, saw: %d", requests["/swaggerapi/foo/bar"])
 	}
 

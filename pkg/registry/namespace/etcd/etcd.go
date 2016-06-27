@@ -18,13 +18,14 @@ package etcd
 
 import (
 	"fmt"
-	"path"
 
 	"k8s.io/kubernetes/pkg/api"
 	apierrors "k8s.io/kubernetes/pkg/api/errors"
+	storageerr "k8s.io/kubernetes/pkg/api/errors/etcd"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	etcdgeneric "k8s.io/kubernetes/pkg/registry/generic/etcd"
 	"k8s.io/kubernetes/pkg/registry/namespace"
@@ -49,16 +50,21 @@ type FinalizeREST struct {
 }
 
 // NewREST returns a RESTStorage object that will work against namespaces.
-func NewREST(s storage.Interface) (*REST, *StatusREST, *FinalizeREST) {
+func NewREST(opts generic.RESTOptions) (*REST, *StatusREST, *FinalizeREST) {
 	prefix := "/namespaces"
+
+	newListFunc := func() runtime.Object { return &api.NamespaceList{} }
+	storageInterface := opts.Decorator(
+		opts.Storage, cachesize.GetWatchCacheSizeByResource(cachesize.Namespaces), &api.Namespace{}, prefix, namespace.Strategy, newListFunc)
+
 	store := &etcdgeneric.Etcd{
 		NewFunc:     func() runtime.Object { return &api.Namespace{} },
-		NewListFunc: func() runtime.Object { return &api.NamespaceList{} },
+		NewListFunc: newListFunc,
 		KeyRootFunc: func(ctx api.Context) string {
 			return prefix
 		},
 		KeyFunc: func(ctx api.Context, name string) (string, error) {
-			return path.Join(prefix, name), nil
+			return etcdgeneric.NoNamespaceKeyFunc(ctx, prefix, name)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.Namespace).Name, nil
@@ -66,13 +72,14 @@ func NewREST(s storage.Interface) (*REST, *StatusREST, *FinalizeREST) {
 		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
 			return namespace.MatchNamespace(label, field)
 		},
-		EndpointName: "namespaces",
+		QualifiedResource:       api.Resource("namespaces"),
+		DeleteCollectionWorkers: opts.DeleteCollectionWorkers,
 
 		CreateStrategy:      namespace.Strategy,
 		UpdateStrategy:      namespace.Strategy,
 		ReturnDeletedObject: true,
 
-		Storage: s,
+		Storage: storageInterface,
 	}
 
 	statusStore := *store
@@ -94,17 +101,57 @@ func (r *REST) Delete(ctx api.Context, name string, options *api.DeleteOptions) 
 	namespace := nsObj.(*api.Namespace)
 
 	// upon first request to delete, we switch the phase to start namespace termination
+	// TODO: enhance graceful deletion's calls to DeleteStrategy to allow phase change and finalizer patterns
 	if namespace.DeletionTimestamp.IsZero() {
-		now := unversioned.Now()
-		namespace.DeletionTimestamp = &now
-		namespace.Status.Phase = api.NamespaceTerminating
-		result, _, err := r.status.Update(ctx, namespace)
-		return result, err
+		key, err := r.Etcd.KeyFunc(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+
+		out := r.Etcd.NewFunc()
+		err = r.Etcd.Storage.GuaranteedUpdate(
+			ctx, key, out, false,
+			storage.SimpleUpdate(func(existing runtime.Object) (runtime.Object, error) {
+				existingNamespace, ok := existing.(*api.Namespace)
+				if !ok {
+					// wrong type
+					return nil, fmt.Errorf("expected *api.Namespace, got %v", existing)
+				}
+				if existingNamespace.UID != namespace.UID {
+					return nil, apierrors.NewConflict(
+						api.Resource("namespaces"),
+						name,
+						fmt.Errorf("UID in precondition: %v, UID in object meta: %v", namespace.UID, existingNamespace.UID),
+					)
+				}
+				// Set the deletion timestamp if needed
+				if existingNamespace.DeletionTimestamp.IsZero() {
+					now := unversioned.Now()
+					existingNamespace.DeletionTimestamp = &now
+				}
+				// Set the namespace phase to terminating, if needed
+				if existingNamespace.Status.Phase != api.NamespaceTerminating {
+					existingNamespace.Status.Phase = api.NamespaceTerminating
+				}
+				return existingNamespace, nil
+			}),
+		)
+
+		if err != nil {
+			err = storageerr.InterpretGetError(err, api.Resource("namespaces"), name)
+			err = storageerr.InterpretUpdateError(err, api.Resource("namespaces"), name)
+			if _, ok := err.(*apierrors.StatusError); !ok {
+				err = apierrors.NewInternalError(err)
+			}
+			return nil, err
+		}
+
+		return out, nil
 	}
 
 	// prior to final deletion, we must ensure that finalizers is empty
 	if len(namespace.Spec.Finalizers) != 0 {
-		err = apierrors.NewConflict("Namespace", namespace.Name, fmt.Errorf("The system is ensuring all content is removed from this namespace.  Upon completion, this namespace will automatically be purged by the system."))
+		err = apierrors.NewConflict(api.Resource("namespaces"), namespace.Name, fmt.Errorf("The system is ensuring all content is removed from this namespace.  Upon completion, this namespace will automatically be purged by the system."))
 		return nil, err
 	}
 	return r.Etcd.Delete(ctx, name, nil)

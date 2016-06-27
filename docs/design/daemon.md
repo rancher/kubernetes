@@ -1,33 +1,5 @@
 <!-- BEGIN MUNGE: UNVERSIONED_WARNING -->
 
-<!-- BEGIN STRIP_FOR_RELEASE -->
-
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
-     width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
-     width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
-     width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
-     width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
-     width="25" height="25">
-
-<h2>PLEASE NOTE: This document applies to the HEAD of the source tree</h2>
-
-If you are using a released version of Kubernetes, you should
-refer to the docs that go with that version.
-
-<strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/design/daemon.md).
-
-Documentation for other releases can be found at
-[releases.k8s.io](http://releases.k8s.io).
-</strong>
---
-
-<!-- END STRIP_FOR_RELEASE -->
 
 <!-- END MUNGE: UNVERSIONED_WARNING -->
 
@@ -65,13 +37,13 @@ The DaemonSet supports standard API features:
   - Using the pod’s nodeSelector field, DaemonSets can be restricted to operate over nodes that have a certain label. For example, suppose that in a cluster some nodes are labeled ‘app=database’. You can use a DaemonSet to launch a datastore pod on exactly those nodes labeled ‘app=database’.
   - Using the pod's nodeName field, DaemonSets can be restricted to operate on a specified node.
   - The PodTemplateSpec used by the DaemonSet is the same as the PodTemplateSpec used by the Replication Controller.
-  - The initial implementation will not guarnatee that DaemonSet pods are created on nodes before other pods.
+  - The initial implementation will not guarantee that DaemonSet pods are created on nodes before other pods.
   - The initial implementation of DaemonSet does not guarantee that DaemonSet pods show up on nodes (for example because of resource limitations of the node), but makes a best effort to launch DaemonSet pods (like Replication Controllers do with pods). Subsequent revisions might ensure that DaemonSet pods show up on nodes, preempting other pods if necessary.
   - The DaemonSet controller adds an annotation "kubernetes.io/created-by: \<json API object reference\>"
   - YAML example:
 
 ```YAML
-  apiVersion: v1
+  apiVersion: extensions/v1beta1
   kind: DaemonSet
   metadata:
     labels:
@@ -97,7 +69,7 @@ The DaemonSet supports standard API features:
     - get (e.g. kubectl get daemonsets)
     - describe
   - Modifiers
-    - delete (if --cascade=true, then first the client turns down all the pods controlled by the DaemonSet (by setting the nodeName to a non-existant name); then it deletes the DaemonSet; then it deletes the pods)
+    - delete (if --cascade=true, then first the client turns down all the pods controlled by the DaemonSet (by setting the nodeSelector to a uuid pair that is unlikely to be set on any node); then it deletes the DaemonSet; then it deletes the pods)
     - label
 	- annotate
     - update operations like patch and replace (only allowed to selector and to nodeSelector and nodeName of pod template)
@@ -152,6 +124,13 @@ A third alternative is to generalize the Replication Controller. We would do som
 ## Open Issues
 
 - Should work similarly to [Deployment](http://issues.k8s.io/1743).
+
+
+
+
+<!-- BEGIN MUNGE: IS_VERSIONED -->
+<!-- TAG IS_VERSIONED -->
+<!-- END MUNGE: IS_VERSIONED -->
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

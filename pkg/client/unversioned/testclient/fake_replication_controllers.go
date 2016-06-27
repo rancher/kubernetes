@@ -18,8 +18,6 @@ package testclient
 
 import (
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -39,8 +37,8 @@ func (c *FakeReplicationControllers) Get(name string) (*api.ReplicationControlle
 	return obj.(*api.ReplicationController), err
 }
 
-func (c *FakeReplicationControllers) List(label labels.Selector) (*api.ReplicationControllerList, error) {
-	obj, err := c.Fake.Invokes(NewListAction("replicationcontrollers", c.Namespace, label, nil), &api.ReplicationControllerList{})
+func (c *FakeReplicationControllers) List(opts api.ListOptions) (*api.ReplicationControllerList, error) {
+	obj, err := c.Fake.Invokes(NewListAction("replicationcontrollers", c.Namespace, opts), &api.ReplicationControllerList{})
 	if obj == nil {
 		return nil, err
 	}
@@ -66,11 +64,19 @@ func (c *FakeReplicationControllers) Update(controller *api.ReplicationControlle
 	return obj.(*api.ReplicationController), err
 }
 
+func (c *FakeReplicationControllers) UpdateStatus(controller *api.ReplicationController) (*api.ReplicationController, error) {
+	obj, err := c.Fake.Invokes(NewUpdateSubresourceAction("replicationcontrollers", "status", c.Namespace, controller), &api.ReplicationController{})
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*api.ReplicationController), err
+}
+
 func (c *FakeReplicationControllers) Delete(name string) error {
 	_, err := c.Fake.Invokes(NewDeleteAction("replicationcontrollers", c.Namespace, name), &api.ReplicationController{})
 	return err
 }
 
-func (c *FakeReplicationControllers) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
-	return c.Fake.InvokesWatch(NewWatchAction("replicationcontrollers", c.Namespace, label, field, resourceVersion))
+func (c *FakeReplicationControllers) Watch(opts api.ListOptions) (watch.Interface, error) {
+	return c.Fake.InvokesWatch(NewWatchAction("replicationcontrollers", c.Namespace, opts))
 }

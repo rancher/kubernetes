@@ -21,9 +21,15 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
+
+	"k8s.io/kubernetes/pkg/cloudprovider/providers/gce"
 )
+
+// TODO: These should really just use the GCE API client library or at least use
+// better formatted output from the --format flag.
 
 func createGCEStaticIP(name string) (string, error) {
 	// gcloud compute --project "abshah-kubernetes-001" addresses create "test-static-ip" --region "us-central1"
@@ -32,27 +38,39 @@ func createGCEStaticIP(name string) (string, error) {
 	// NAME           REGION      ADDRESS       STATUS
 	// test-static-ip us-central1 104.197.143.7 RESERVED
 
-	output, err := exec.Command("gcloud", "compute", "addresses", "create",
-		name, "--project", testContext.CloudConfig.ProjectID,
-		"--region", "us-central1", "-q").CombinedOutput()
+	var outputBytes []byte
+	var err error
+	region, err := gce.GetGCERegion(testContext.CloudConfig.Zone)
 	if err != nil {
-		glog.Errorf("Creating static IP with name:%s in project: %s", name, testContext.CloudConfig.ProjectID)
-		glog.Errorf("output: %s", output)
-		return "", err
+		return "", fmt.Errorf("failed to convert zone to region: %v", err)
 	}
-	glog.Errorf("Creating static IP with name:%s in project: %s", name, testContext.CloudConfig.ProjectID)
-	text := string(output)
-	if strings.Contains(text, "RESERVED") {
+	glog.Infof("Creating static IP with name %q in project %q in region %q", name, testContext.CloudConfig.ProjectID, region)
+	for attempts := 0; attempts < 4; attempts++ {
+		outputBytes, err = exec.Command("gcloud", "compute", "addresses", "create",
+			name, "--project", testContext.CloudConfig.ProjectID,
+			"--region", region, "-q").CombinedOutput()
+		if err == nil {
+			break
+		}
+		glog.Errorf("output from failed attempt to create static IP: %s", outputBytes)
+		time.Sleep(time.Duration(5*attempts) * time.Second)
+	}
+	if err != nil {
+		// Ditch the error, since the stderr in the output is what actually contains
+		// any useful info.
+		return "", fmt.Errorf("failed to create static IP: %s", outputBytes)
+	}
+	output := string(outputBytes)
+	if strings.Contains(output, "RESERVED") {
 		r, _ := regexp.Compile("[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+")
-		staticIP := r.FindString(text)
+		staticIP := r.FindString(output)
 		if staticIP == "" {
-			glog.Errorf("Static IP creation output is \n %s", text)
-			return "", fmt.Errorf("Static IP not found in gcloud compute command output")
+			return "", fmt.Errorf("static IP not found in gcloud command output: %v", output)
 		} else {
 			return staticIP, nil
 		}
 	} else {
-		return "", fmt.Errorf("Static IP Could not be reserved.")
+		return "", fmt.Errorf("static IP %q could not be reserved: %v", name, output)
 	}
 }
 
@@ -63,8 +81,18 @@ func deleteGCEStaticIP(name string) error {
 	// NAME           REGION      ADDRESS       STATUS
 	// test-static-ip us-central1 104.197.143.7 RESERVED
 
-	_, err := exec.Command("gcloud", "compute", "addresses", "delete",
+	region, err := gce.GetGCERegion(testContext.CloudConfig.Zone)
+	if err != nil {
+		return fmt.Errorf("failed to convert zone to region: %v", err)
+	}
+	glog.Infof("Deleting static IP with name %q in project %q in region %q", name, testContext.CloudConfig.ProjectID, region)
+	outputBytes, err := exec.Command("gcloud", "compute", "addresses", "delete",
 		name, "--project", testContext.CloudConfig.ProjectID,
-		"--region", "us-central1", "-q").CombinedOutput()
-	return err
+		"--region", region, "-q").CombinedOutput()
+	if err != nil {
+		// Ditch the error, since the stderr in the output is what actually contains
+		// any useful info.
+		return fmt.Errorf("failed to delete static IP %q: %v", name, string(outputBytes))
+	}
+	return nil
 }

@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/testapi"
+	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 )
 
@@ -73,7 +75,7 @@ func TestNamespaceStatusStrategy(t *testing.T) {
 	}
 	now := unversioned.Now()
 	oldNamespace := &api.Namespace{
-		ObjectMeta: api.ObjectMeta{Name: "foo", ResourceVersion: "10"},
+		ObjectMeta: api.ObjectMeta{Name: "foo", ResourceVersion: "10", DeletionTimestamp: &now},
 		Spec:       api.NamespaceSpec{Finalizers: []api.FinalizerName{"kubernetes"}},
 		Status:     api.NamespaceStatus{Phase: api.NamespaceActive},
 	}
@@ -129,4 +131,13 @@ func TestNamespaceFinalizeStrategy(t *testing.T) {
 	if namespace.ResourceVersion != "9" {
 		t.Errorf("Incoming resource version on update should not be mutated")
 	}
+}
+
+func TestSelectableFieldLabelConversions(t *testing.T) {
+	apitesting.TestSelectableFieldLabelConversionsOfKind(t,
+		testapi.Default.GroupVersion().String(),
+		"Namespace",
+		NamespaceToSelectableFields(&api.Namespace{}),
+		map[string]string{"name": "metadata.name"},
+	)
 }

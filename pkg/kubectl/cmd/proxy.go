@@ -32,15 +32,15 @@ import (
 const (
 	default_port  = 8001
 	proxy_example = `# Run a proxy to kubernetes apiserver on port 8011, serving static content from ./local/www/
-$ kubectl proxy --port=8011 --www=./local/www/
+kubectl proxy --port=8011 --www=./local/www/
 
 # Run a proxy to kubernetes apiserver on an arbitrary local port.
 # The chosen port for the server will be output to stdout.
-$ kubectl proxy --port=0
+kubectl proxy --port=0
 
 # Run a proxy to kubernetes apiserver, changing the api prefix to k8s-api
 # This makes e.g. the pods api available at localhost:8011/k8s-api/v1/pods/
-$ kubectl proxy --api-prefix=/k8s-api`
+kubectl proxy --api-prefix=/k8s-api`
 )
 
 func NewCmdProxy(f *cmdutil.Factory, out io.Writer) *cobra.Command {
@@ -71,7 +71,7 @@ The above lets you 'curl localhost:8001/custom/api/v1/pods'
 	}
 	cmd.Flags().StringP("www", "w", "", "Also serve static files from the given directory under the specified prefix.")
 	cmd.Flags().StringP("www-prefix", "P", "/static/", "Prefix to serve static files under, if static file directory is specified.")
-	cmd.Flags().StringP("api-prefix", "", "/api/", "Prefix to serve the proxied API under.")
+	cmd.Flags().StringP("api-prefix", "", "/", "Prefix to serve the proxied API under.")
 	cmd.Flags().String("accept-paths", kubectl.DefaultPathAcceptRE, "Regular expression for paths that the proxy should accept.")
 	cmd.Flags().String("reject-paths", kubectl.DefaultPathRejectRE, "Regular expression for paths that the proxy should reject.")
 	cmd.Flags().String("accept-hosts", kubectl.DefaultHostAcceptRE, "Regular expression for hosts that the proxy should accept.")

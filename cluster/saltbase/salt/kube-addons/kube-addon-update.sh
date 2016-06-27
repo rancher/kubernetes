@@ -98,7 +98,7 @@ function log() {
 function get-object-kind-from-file() {
     # prints to stdout, so log cannot be used
     #WARNING: only yaml is supported
-    cat $1 | python -c '''
+    cat $1 | ${PYTHON} -c '''
 try:
         import pipes,sys,yaml
         y = yaml.load(sys.stdin)
@@ -120,7 +120,7 @@ function get-object-nsname-from-file() {
     # prints to stdout, so log cannot be used
     #WARNING: only yaml is supported
     #addons that do not specify a namespace are assumed to be in "default".
-    cat $1 | python -c '''
+    cat $1 | ${PYTHON} -c '''
 try:
         import pipes,sys,yaml
         y = yaml.load(sys.stdin)
@@ -349,6 +349,12 @@ function match-objects() {
     new_files=""
 
     addon_nsnames_on_server=$(get-addon-nsnames-from-server "${obj_type}")
+    # if the api server is unavailable then abandon the update for this cycle 
+    if [[ $? -ne 0 ]]; then
+        log ERR "unable to query ${obj_type} - exiting"
+        exit 1
+    fi
+
     addon_paths_in_files=$(get-addon-paths-from-disk "${addon_dir}" "${obj_type}")
 
     log DB2 "addon_nsnames_on_server=${addon_nsnames_on_server}"
@@ -469,6 +475,7 @@ function update-addons() {
     local -r addon_path=$1
     # be careful, reconcile-objects uses global variables
     reconcile-objects ${addon_path} ReplicationController "-" &
+    reconcile-objects ${addon_path} Deployment "-" &
 
     # We don't expect names to be versioned for the following kinds, so
     # we match the entire name, ignoring version suffix.

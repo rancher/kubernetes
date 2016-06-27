@@ -18,14 +18,13 @@ package etcd
 
 import (
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	etcdgeneric "k8s.io/kubernetes/pkg/registry/generic/etcd"
 	"k8s.io/kubernetes/pkg/registry/thirdpartyresource"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage"
 )
 
 // REST implements a RESTStorage for ThirdPartyResources against etcd
@@ -34,12 +33,15 @@ type REST struct {
 }
 
 // NewREST returns a registry which will store ThirdPartyResource in the given helper
-func NewREST(s storage.Interface) *REST {
+func NewREST(opts generic.RESTOptions) *REST {
 	prefix := "/thirdpartyresources"
 
+	// We explicitly do NOT do any decoration here yet.
+	storageInterface := opts.Storage
+
 	store := &etcdgeneric.Etcd{
-		NewFunc:     func() runtime.Object { return &experimental.ThirdPartyResource{} },
-		NewListFunc: func() runtime.Object { return &experimental.ThirdPartyResourceList{} },
+		NewFunc:     func() runtime.Object { return &extensions.ThirdPartyResource{} },
+		NewListFunc: func() runtime.Object { return &extensions.ThirdPartyResourceList{} },
 		KeyRootFunc: func(ctx api.Context) string {
 			return etcdgeneric.NamespaceKeyRootFunc(ctx, prefix)
 		},
@@ -47,16 +49,17 @@ func NewREST(s storage.Interface) *REST {
 			return etcdgeneric.NamespaceKeyFunc(ctx, prefix, id)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
-			return obj.(*experimental.ThirdPartyResource).Name, nil
+			return obj.(*extensions.ThirdPartyResource).Name, nil
 		},
 		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
 			return thirdpartyresource.Matcher(label, field)
 		},
-		EndpointName:   "thirdPartyResources",
-		CreateStrategy: thirdpartyresource.Strategy,
-		UpdateStrategy: thirdpartyresource.Strategy,
+		QualifiedResource:       extensions.Resource("thirdpartyresources"),
+		DeleteCollectionWorkers: opts.DeleteCollectionWorkers,
+		CreateStrategy:          thirdpartyresource.Strategy,
+		UpdateStrategy:          thirdpartyresource.Strategy,
 
-		Storage: s,
+		Storage: storageInterface,
 	}
 
 	return &REST{store}

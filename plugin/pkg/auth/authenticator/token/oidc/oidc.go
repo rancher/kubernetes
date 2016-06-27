@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/jose"
@@ -30,6 +31,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/auth/user"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/net"
 )
 
 var (
@@ -38,15 +40,17 @@ var (
 )
 
 type OIDCAuthenticator struct {
-	clientConfig  oidc.ClientConfig
-	client        *oidc.Client
-	usernameClaim string
+	clientConfig     oidc.ClientConfig
+	client           *oidc.Client
+	usernameClaim    string
+	groupsClaim      string
+	stopSyncProvider chan struct{}
 }
 
 // New creates a new OpenID Connect client with the given issuerURL and clientID.
 // NOTE(yifan): For now we assume the server provides the "jwks_uri" so we don't
 // need to manager the key sets by ourselves.
-func New(issuerURL, clientID, caFile, usernameClaim string) (*OIDCAuthenticator, error) {
+func New(issuerURL, clientID, caFile, usernameClaim, groupsClaim string) (*OIDCAuthenticator, error) {
 	var cfg oidc.ProviderConfig
 	var err error
 	var roots *x509.CertPool
@@ -71,7 +75,7 @@ func New(issuerURL, clientID, caFile, usernameClaim string) (*OIDCAuthenticator,
 	}
 
 	// Copied from http.DefaultTransport.
-	tr := util.SetTransportDefaults(&http.Transport{
+	tr := net.SetTransportDefaults(&http.Transport{
 		// According to golang's doc, if RootCAs is nil,
 		// TLS uses the host's root CA set.
 		TLSClientConfig: &tls.Config{RootCAs: roots},
@@ -85,7 +89,7 @@ func New(issuerURL, clientID, caFile, usernameClaim string) (*OIDCAuthenticator,
 			return nil, fmt.Errorf("failed to fetch provider config after %v retries", maxRetries)
 		}
 
-		cfg, err = oidc.FetchProviderConfig(hc, issuerURL)
+		cfg, err = oidc.FetchProviderConfig(hc, strings.TrimSuffix(issuerURL, "/"))
 		if err == nil {
 			break
 		}
@@ -113,9 +117,9 @@ func New(issuerURL, clientID, caFile, usernameClaim string) (*OIDCAuthenticator,
 	// SyncProviderConfig will start a goroutine to periodically synchronize the provider config.
 	// The synchronization interval is set by the expiration length of the config, and has a mininum
 	// and maximum threshold.
-	client.SyncProviderConfig(issuerURL)
+	stop := client.SyncProviderConfig(issuerURL)
 
-	return &OIDCAuthenticator{ccfg, client, usernameClaim}, nil
+	return &OIDCAuthenticator{ccfg, client, usernameClaim, groupsClaim, stop}, nil
 }
 
 // AuthenticateToken decodes and verifies a JWT using the OIDC client, if the verification succeeds,
@@ -153,6 +157,27 @@ func (a *OIDCAuthenticator) AuthenticateToken(value string) (user.Info, bool, er
 		username = fmt.Sprintf("%s#%s", a.clientConfig.ProviderConfig.Issuer, claim)
 	}
 
-	// TODO(yifan): Add UID and Group, also populate the issuer to upper layer.
-	return &user.DefaultInfo{Name: username}, true, nil
+	// TODO(yifan): Add UID, also populate the issuer to upper layer.
+	info := &user.DefaultInfo{Name: username}
+
+	if a.groupsClaim != "" {
+		groups, found, err := claims.StringsClaim(a.groupsClaim)
+		if err != nil {
+			// Custom claim is present, but isn't an array of strings.
+			return nil, false, fmt.Errorf("custom group claim contains invalid object: %v", err)
+		}
+		if found {
+			info.Groups = groups
+		}
+	}
+	return info, true, nil
+}
+
+// Close closes the OIDC authenticator, this will close the provider sync goroutine.
+func (a *OIDCAuthenticator) Close() {
+	// This assumes the s.stopSyncProvider is an unbuffered channel.
+	// So instead of closing the channel, we send am empty struct here.
+	// This guarantees that when this function returns, there is no flying requests,
+	// because a send to an unbuffered channel happens after the receive from the channel.
+	a.stopSyncProvider <- struct{}{}
 }

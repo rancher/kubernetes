@@ -18,7 +18,8 @@ package unversioned
 
 import (
 	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 )
 
 type ScaleNamespacer interface {
@@ -27,18 +28,18 @@ type ScaleNamespacer interface {
 
 // ScaleInterface has methods to work with Scale (sub)resources.
 type ScaleInterface interface {
-	Get(string, string) (*experimental.Scale, error)
-	Update(string, *experimental.Scale) (*experimental.Scale, error)
+	Get(string, string) (*extensions.Scale, error)
+	Update(string, *extensions.Scale) (*extensions.Scale, error)
 }
 
 // horizontalPodAutoscalers implements HorizontalPodAutoscalersNamespacer interface
 type scales struct {
-	client *ExperimentalClient
+	client *ExtensionsClient
 	ns     string
 }
 
 // newHorizontalPodAutoscalers returns a horizontalPodAutoscalers
-func newScales(c *ExperimentalClient, namespace string) *scales {
+func newScales(c *ExtensionsClient, namespace string) *scales {
 	return &scales{
 		client: c,
 		ns:     namespace,
@@ -46,19 +47,27 @@ func newScales(c *ExperimentalClient, namespace string) *scales {
 }
 
 // Get takes the reference to scale subresource and returns the subresource or error, if one occurs.
-func (c *scales) Get(kind string, name string) (result *experimental.Scale, err error) {
-	result = &experimental.Scale{}
-	resource, _ := meta.KindToResource(kind, false)
-	err = c.client.Get().Namespace(c.ns).Resource(resource).Name(name).SubResource("scale").Do().Into(result)
+func (c *scales) Get(kind string, name string) (result *extensions.Scale, err error) {
+	result = &extensions.Scale{}
+
+	// TODO this method needs to take a proper unambiguous kind
+	fullyQualifiedKind := unversioned.GroupVersionKind{Kind: kind}
+	resource, _ := meta.KindToResource(fullyQualifiedKind)
+
+	err = c.client.Get().Namespace(c.ns).Resource(resource.Resource).Name(name).SubResource("scale").Do().Into(result)
 	return
 }
 
-func (c *scales) Update(kind string, scale *experimental.Scale) (result *experimental.Scale, err error) {
-	result = &experimental.Scale{}
-	resource, _ := meta.KindToResource(kind, false)
+func (c *scales) Update(kind string, scale *extensions.Scale) (result *extensions.Scale, err error) {
+	result = &extensions.Scale{}
+
+	// TODO this method needs to take a proper unambiguous kind
+	fullyQualifiedKind := unversioned.GroupVersionKind{Kind: kind}
+	resource, _ := meta.KindToResource(fullyQualifiedKind)
+
 	err = c.client.Put().
 		Namespace(scale.Namespace).
-		Resource(resource).
+		Resource(resource.Resource).
 		Name(scale.Name).
 		SubResource("scale").
 		Body(scale).

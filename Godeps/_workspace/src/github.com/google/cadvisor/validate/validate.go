@@ -19,17 +19,17 @@ package validate
 
 import (
 	"fmt"
-	"github.com/google/cadvisor/manager"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"path"
 	"strings"
 
-	"github.com/docker/libcontainer/cgroups"
-	dclient "github.com/fsouza/go-dockerclient"
 	"github.com/google/cadvisor/container/docker"
+	"github.com/google/cadvisor/manager"
 	"github.com/google/cadvisor/utils"
+
+	"github.com/opencontainers/runc/libcontainer/cgroups"
 )
 
 const (
@@ -185,18 +185,13 @@ func validateCgroups() (string, string) {
 }
 
 func validateDockerInfo() (string, string) {
-	client, err := dclient.NewClient(*docker.ArgDockerEndpoint)
+	client, err := docker.Client()
 	if err == nil {
 		info, err := client.Info()
 		if err == nil {
 			execDriver := info.Get("ExecutionDriver")
 			storageDriver := info.Get("Driver")
 			desc := fmt.Sprintf("Docker exec driver is %s. Storage driver is %s.\n", execDriver, storageDriver)
-			if docker.UseSystemd() {
-				desc += "\tsystemd is being used to create cgroups.\n"
-			} else {
-				desc += "\tCgroups are being created through cgroup filesystem.\n"
-			}
 			if strings.Contains(execDriver, "native") {
 				stateFile := docker.DockerStateDir()
 				if !utils.FileExists(stateFile) {

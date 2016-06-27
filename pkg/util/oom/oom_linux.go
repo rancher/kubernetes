@@ -20,13 +20,14 @@ package oom
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path"
 	"strconv"
+	"strings"
 
-	"github.com/docker/libcontainer/cgroups/fs"
-	"github.com/docker/libcontainer/configs"
 	"github.com/golang/glog"
+	"github.com/opencontainers/runc/libcontainer/cgroups/fs"
+	"github.com/opencontainers/runc/libcontainer/configs"
 )
 
 func NewOOMAdjuster() *OOMAdjuster {
@@ -39,15 +40,26 @@ func NewOOMAdjuster() *OOMAdjuster {
 }
 
 func getPids(cgroupName string) ([]int, error) {
+
 	fsManager := fs.Manager{
 		Cgroups: &configs.Cgroup{
-			Name: cgroupName,
+			Parent: "/",
+			Name:   cgroupName,
 		},
 	}
-	return fsManager.GetPids()
+	pids, err := fsManager.GetPids()
+	// When docker is nested in docker the cgroups look like /docker/:id/docker/:id.
+	// In this situation we need to ignore the first portion of the path.
+	i := strings.LastIndex(cgroupName, "/docker")
+	if err != nil && i > 0 {
+		return getPids(cgroupName[i:])
+	} else {
+		return pids, err
+	}
 }
 
 // Writes 'value' to /proc/<pid>/oom_score_adj. PID = 0 means self
+// Returns os.ErrNotExist if the `pid` does not exist.
 func applyOOMScoreAdj(pid int, oomScoreAdj int) error {
 	if pid < 0 {
 		return fmt.Errorf("invalid PID %d specified for oom_score_adj", pid)
@@ -60,20 +72,25 @@ func applyOOMScoreAdj(pid int, oomScoreAdj int) error {
 		pidStr = strconv.Itoa(pid)
 	}
 
-	oomScoreAdjPath := path.Join("/proc", pidStr, "oom_score_adj")
 	maxTries := 2
+	oomScoreAdjPath := path.Join("/proc", pidStr, "oom_score_adj")
+	value := strconv.Itoa(oomScoreAdj)
 	var err error
 	for i := 0; i < maxTries; i++ {
-		_, readErr := ioutil.ReadFile(oomScoreAdjPath)
-		if readErr != nil {
-			err = fmt.Errorf("failed to read oom_score_adj: %v", readErr)
-		} else if writeErr := ioutil.WriteFile(oomScoreAdjPath, []byte(strconv.Itoa(oomScoreAdj)), 0700); writeErr != nil {
-			err = fmt.Errorf("failed to set oom_score_adj to %d: %v", oomScoreAdj, writeErr)
-		} else {
-			return nil
+		f, err := os.Open(oomScoreAdjPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return os.ErrNotExist
+			}
+			err = fmt.Errorf("failed to apply oom-score-adj to pid %d (%v)", pid, err)
+			continue
 		}
+		if _, err := f.Write([]byte(value)); err != nil {
+			err = fmt.Errorf("failed to apply oom-score-adj to pid %d (%v)", pid, err)
+			continue
+		}
+		return nil
 	}
-
 	return err
 }
 
@@ -85,17 +102,28 @@ func (oomAdjuster *OOMAdjuster) applyOOMScoreAdjContainer(cgroupName string, oom
 		continueAdjusting := false
 		pidList, err := oomAdjuster.pidLister(cgroupName)
 		if err != nil {
+			if os.IsNotExist(err) {
+				// Nothing to do since the container doesn't exist anymore.
+				return os.ErrNotExist
+			}
 			continueAdjusting = true
-			glog.Errorf("Error getting process list for cgroup %s: %+v", cgroupName, err)
+			glog.V(10).Infof("Error getting process list for cgroup %s: %+v", cgroupName, err)
 		} else if len(pidList) == 0 {
+			glog.V(10).Infof("Pid list is empty")
 			continueAdjusting = true
 		} else {
 			for _, pid := range pidList {
 				if !adjustedProcessSet[pid] {
-					continueAdjusting = true
+					glog.V(10).Infof("pid %d needs to be set", pid)
 					if err = oomAdjuster.ApplyOOMScoreAdj(pid, oomScoreAdj); err == nil {
 						adjustedProcessSet[pid] = true
+					} else if err == os.ErrNotExist {
+						continue
+					} else {
+						glog.V(10).Infof("cannot adjust oom score for pid %d - %v", pid, err)
+						continueAdjusting = true
 					}
+					// Processes can come and go while we try to apply oom score adjust value. So ignore errors here.
 				}
 			}
 		}

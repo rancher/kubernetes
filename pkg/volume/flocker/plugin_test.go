@@ -17,26 +17,31 @@ limitations under the License.
 package flocker
 
 import (
+	"os"
 	"testing"
 
-	flockerClient "github.com/ClusterHQ/flocker-go"
+	flockerclient "github.com/ClusterHQ/flocker-go"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/types"
+	utiltesting "k8s.io/kubernetes/pkg/util/testing"
 	"k8s.io/kubernetes/pkg/volume"
+	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 )
 
 const pluginName = "kubernetes.io/flocker"
 
-func newInitializedVolumePlugMgr() volume.VolumePluginMgr {
+func newInitializedVolumePlugMgr(t *testing.T) (volume.VolumePluginMgr, string) {
 	plugMgr := volume.VolumePluginMgr{}
-	plugMgr.InitPlugins(ProbeVolumePlugins(), volume.NewFakeVolumeHost("/foo/bar", nil, nil))
-	return plugMgr
+	dir, err := utiltesting.MkTmpdir("flocker")
+	assert.NoError(t, err)
+	plugMgr.InitPlugins(ProbeVolumePlugins(), volumetest.NewFakeVolumeHost(dir, nil, nil))
+	return plugMgr, dir
 }
 
 func TestGetByName(t *testing.T) {
 	assert := assert.New(t)
-	plugMgr := newInitializedVolumePlugMgr()
+	plugMgr, _ := newInitializedVolumePlugMgr(t)
 
 	plug, err := plugMgr.FindPluginByName(pluginName)
 	assert.NotNil(plug, "Can't find the plugin by name")
@@ -45,7 +50,7 @@ func TestGetByName(t *testing.T) {
 
 func TestCanSupport(t *testing.T) {
 	assert := assert.New(t)
-	plugMgr := newInitializedVolumePlugMgr()
+	plugMgr, _ := newInitializedVolumePlugMgr(t)
 
 	plug, err := plugMgr.FindPluginByName(pluginName)
 	assert.NoError(err)
@@ -113,7 +118,7 @@ func TestGetFlockerVolumeSource(t *testing.T) {
 func TestNewBuilder(t *testing.T) {
 	assert := assert.New(t)
 
-	plugMgr := newInitializedVolumePlugMgr()
+	plugMgr, _ := newInitializedVolumePlugMgr(t)
 	plug, err := plugMgr.FindPluginByName(pluginName)
 	assert.NoError(err)
 
@@ -142,8 +147,8 @@ func TestNewCleaner(t *testing.T) {
 }
 
 func TestIsReadOnly(t *testing.T) {
-	b := flockerBuilder{readOnly: true}
-	assert.True(t, b.IsReadOnly())
+	b := &flockerBuilder{readOnly: true}
+	assert.True(t, b.GetAttributes().ReadOnly)
 }
 
 func TestGetPath(t *testing.T) {
@@ -157,7 +162,7 @@ func TestGetPath(t *testing.T) {
 
 type mockFlockerClient struct {
 	datasetID, primaryUUID, path string
-	datasetState                 *flockerClient.DatasetState
+	datasetState                 *flockerclient.DatasetState
 }
 
 func newMockFlockerClient(mockDatasetID, mockPrimaryUUID, mockPath string) *mockFlockerClient {
@@ -165,7 +170,7 @@ func newMockFlockerClient(mockDatasetID, mockPrimaryUUID, mockPath string) *mock
 		datasetID:   mockDatasetID,
 		primaryUUID: mockPrimaryUUID,
 		path:        mockPath,
-		datasetState: &flockerClient.DatasetState{
+		datasetState: &flockerclient.DatasetState{
 			Path:      mockPath,
 			DatasetID: mockDatasetID,
 			Primary:   mockPrimaryUUID,
@@ -173,10 +178,10 @@ func newMockFlockerClient(mockDatasetID, mockPrimaryUUID, mockPath string) *mock
 	}
 }
 
-func (m mockFlockerClient) CreateDataset(metaName string) (*flockerClient.DatasetState, error) {
+func (m mockFlockerClient) CreateDataset(metaName string) (*flockerclient.DatasetState, error) {
 	return m.datasetState, nil
 }
-func (m mockFlockerClient) GetDatasetState(datasetID string) (*flockerClient.DatasetState, error) {
+func (m mockFlockerClient) GetDatasetState(datasetID string) (*flockerclient.DatasetState, error) {
 	return m.datasetState, nil
 }
 func (m mockFlockerClient) GetDatasetID(metaName string) (string, error) {
@@ -185,7 +190,7 @@ func (m mockFlockerClient) GetDatasetID(metaName string) (string, error) {
 func (m mockFlockerClient) GetPrimaryUUID() (string, error) {
 	return m.primaryUUID, nil
 }
-func (m mockFlockerClient) UpdatePrimaryForDataset(primaryUUID, datasetID string) (*flockerClient.DatasetState, error) {
+func (m mockFlockerClient) UpdatePrimaryForDataset(primaryUUID, datasetID string) (*flockerclient.DatasetState, error) {
 	return m.datasetState, nil
 }
 
@@ -196,7 +201,10 @@ func TestSetUpAtInternal(t *testing.T) {
 
 	assert := assert.New(t)
 
-	plugMgr := newInitializedVolumePlugMgr()
+	plugMgr, rootDir := newInitializedVolumePlugMgr(t)
+	if rootDir != "" {
+		defer os.RemoveAll(rootDir)
+	}
 	plug, err := plugMgr.FindPluginByName(flockerPluginName)
 	assert.NoError(err)
 
@@ -204,6 +212,6 @@ func TestSetUpAtInternal(t *testing.T) {
 	b := flockerBuilder{flocker: &flocker{pod: pod, plugin: plug.(*flockerPlugin)}}
 	b.client = newMockFlockerClient("dataset-id", "primary-uid", mockPath)
 
-	assert.NoError(b.SetUpAt(dir))
+	assert.NoError(b.SetUpAt(dir, nil))
 	assert.Equal(expectedPath, b.flocker.path)
 }

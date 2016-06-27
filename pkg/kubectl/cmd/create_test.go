@@ -27,6 +27,7 @@ import (
 )
 
 func TestExtraArgsFail(t *testing.T) {
+	initTestErrorHandler(t)
 	buf := bytes.NewBuffer([]byte{})
 
 	f, _, _ := NewAPIFactory()
@@ -37,6 +38,7 @@ func TestExtraArgsFail(t *testing.T) {
 }
 
 func TestCreateObject(t *testing.T) {
+	initTestErrorHandler(t)
 	_, _, rc := testData()
 	rc.Items[0].Name = "redis-master-controller"
 
@@ -44,7 +46,7 @@ func TestCreateObject(t *testing.T) {
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		Codec: codec,
-		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/replicationcontrollers" && m == "POST":
 				return &http.Response{StatusCode: 201, Body: objBody(codec, &rc.Items[0])}, nil
@@ -58,7 +60,7 @@ func TestCreateObject(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{})
 
 	cmd := NewCmdCreate(f, buf)
-	cmd.Flags().Set("filename", "../../../examples/guestbook/redis-master-controller.yaml")
+	cmd.Flags().Set("filename", "../../../examples/guestbook/legacy/redis-master-controller.yaml")
 	cmd.Flags().Set("output", "name")
 	cmd.Run(cmd, []string{})
 
@@ -69,13 +71,14 @@ func TestCreateObject(t *testing.T) {
 }
 
 func TestCreateMultipleObject(t *testing.T) {
+	initTestErrorHandler(t)
 	_, svc, rc := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		Codec: codec,
-		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/services" && m == "POST":
 				return &http.Response{StatusCode: 201, Body: objBody(codec, &svc.Items[0])}, nil
@@ -91,7 +94,7 @@ func TestCreateMultipleObject(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{})
 
 	cmd := NewCmdCreate(f, buf)
-	cmd.Flags().Set("filename", "../../../examples/guestbook/redis-master-controller.yaml")
+	cmd.Flags().Set("filename", "../../../examples/guestbook/legacy/redis-master-controller.yaml")
 	cmd.Flags().Set("filename", "../../../examples/guestbook/frontend-service.yaml")
 	cmd.Flags().Set("output", "name")
 	cmd.Run(cmd, []string{})
@@ -103,17 +106,16 @@ func TestCreateMultipleObject(t *testing.T) {
 }
 
 func TestCreateDirectory(t *testing.T) {
-	_, svc, rc := testData()
+	initTestErrorHandler(t)
+	_, _, rc := testData()
 	rc.Items[0].Name = "name"
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		Codec: codec,
-		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
-			case p == "/namespaces/test/services" && m == "POST":
-				return &http.Response{StatusCode: 201, Body: objBody(codec, &svc.Items[0])}, nil
 			case p == "/namespaces/test/replicationcontrollers" && m == "POST":
 				return &http.Response{StatusCode: 201, Body: objBody(codec, &rc.Items[0])}, nil
 			default:
@@ -126,16 +128,17 @@ func TestCreateDirectory(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{})
 
 	cmd := NewCmdCreate(f, buf)
-	cmd.Flags().Set("filename", "../../../examples/guestbook")
+	cmd.Flags().Set("filename", "../../../examples/guestbook/legacy")
 	cmd.Flags().Set("output", "name")
 	cmd.Run(cmd, []string{})
 
-	if buf.String() != "replicationcontroller/name\nservice/baz\nreplicationcontroller/name\nservice/baz\nreplicationcontroller/name\nservice/baz\n" {
+	if buf.String() != "replicationcontroller/name\nreplicationcontroller/name\nreplicationcontroller/name\n" {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 }
 
 func TestPrintObjectSpecificMessage(t *testing.T) {
+	initTestErrorHandler(t)
 	tests := []struct {
 		obj          runtime.Object
 		expectOutput bool
@@ -170,6 +173,7 @@ func TestPrintObjectSpecificMessage(t *testing.T) {
 }
 
 func TestMakePortsString(t *testing.T) {
+	initTestErrorHandler(t)
 	tests := []struct {
 		ports          []api.ServicePort
 		useNodePort    bool

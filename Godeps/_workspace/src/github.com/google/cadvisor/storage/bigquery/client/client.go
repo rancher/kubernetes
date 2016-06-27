@@ -20,9 +20,9 @@ import (
 	"io/ioutil"
 	"strings"
 
-	bigquery "code.google.com/p/google-api-go-client/bigquery/v2"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/jwt"
+	bigquery "google.golang.org/api/bigquery/v2"
 )
 
 var (
@@ -36,7 +36,6 @@ var (
 
 const (
 	errAlreadyExists string = "Error 409: Already Exists"
-	queryLimit       int64  = 200
 )
 
 type Client struct {

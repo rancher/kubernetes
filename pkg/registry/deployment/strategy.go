@@ -18,15 +18,16 @@ package deployment
 
 import (
 	"fmt"
+	"reflect"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
-	"k8s.io/kubernetes/pkg/apis/experimental/validation"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/apis/extensions/validation"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	errs "k8s.io/kubernetes/pkg/util/fielderrors"
+	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 // deploymentStrategy implements behavior for Deployments.
@@ -46,12 +47,19 @@ func (deploymentStrategy) NamespaceScoped() bool {
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
 func (deploymentStrategy) PrepareForCreate(obj runtime.Object) {
+	deployment := obj.(*extensions.Deployment)
+	deployment.Status = extensions.DeploymentStatus{}
+	deployment.Generation = 1
 }
 
 // Validate validates a new deployment.
-func (deploymentStrategy) Validate(ctx api.Context, obj runtime.Object) errs.ValidationErrorList {
-	deployment := obj.(*experimental.Deployment)
+func (deploymentStrategy) Validate(ctx api.Context, obj runtime.Object) field.ErrorList {
+	deployment := obj.(*extensions.Deployment)
 	return validation.ValidateDeployment(deployment)
+}
+
+// Canonicalize normalizes the object after validation.
+func (deploymentStrategy) Canonicalize(obj runtime.Object) {
 }
 
 // AllowCreateOnUpdate is false for deployments.
@@ -61,22 +69,50 @@ func (deploymentStrategy) AllowCreateOnUpdate() bool {
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
 func (deploymentStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newDeployment := obj.(*extensions.Deployment)
+	oldDeployment := old.(*extensions.Deployment)
+	newDeployment.Status = oldDeployment.Status
+
+	// Spec updates bump the generation so that we can distinguish between
+	// scaling events and template changes, annotation updates bump the generation
+	// because annotations are copied from deployments to their replica sets.
+	if !reflect.DeepEqual(newDeployment.Spec, oldDeployment.Spec) ||
+		!reflect.DeepEqual(newDeployment.Annotations, oldDeployment.Annotations) {
+		newDeployment.Generation = oldDeployment.Generation + 1
+	}
 }
 
 // ValidateUpdate is the default update validation for an end user.
-func (deploymentStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) errs.ValidationErrorList {
-	return validation.ValidateDeploymentUpdate(old.(*experimental.Deployment), obj.(*experimental.Deployment))
+func (deploymentStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) field.ErrorList {
+	return validation.ValidateDeploymentUpdate(obj.(*extensions.Deployment), old.(*extensions.Deployment))
 }
 
 func (deploymentStrategy) AllowUnconditionalUpdate() bool {
 	return true
 }
 
+type deploymentStatusStrategy struct {
+	deploymentStrategy
+}
+
+var StatusStrategy = deploymentStatusStrategy{Strategy}
+
+// PrepareForUpdate clears fields that are not allowed to be set by end users on update of status
+func (deploymentStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newDeployment := obj.(*extensions.Deployment)
+	oldDeployment := old.(*extensions.Deployment)
+	newDeployment.Spec = oldDeployment.Spec
+	newDeployment.Labels = oldDeployment.Labels
+}
+
+// ValidateUpdate is the default update validation for an end user updating status
+func (deploymentStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) field.ErrorList {
+	return validation.ValidateDeploymentStatusUpdate(obj.(*extensions.Deployment), old.(*extensions.Deployment))
+}
+
 // DeploymentToSelectableFields returns a field set that represents the object.
-func DeploymentToSelectableFields(deployment *experimental.Deployment) fields.Set {
-	return fields.Set{
-		"metadata.name": deployment.Name,
-	}
+func DeploymentToSelectableFields(deployment *extensions.Deployment) fields.Set {
+	return generic.ObjectMetaFieldsSet(deployment.ObjectMeta, true)
 }
 
 // MatchDeployment is the filter used by the generic etcd backend to route
@@ -87,7 +123,7 @@ func MatchDeployment(label labels.Selector, field fields.Selector) generic.Match
 		Label: label,
 		Field: field,
 		GetAttrs: func(obj runtime.Object) (labels.Set, fields.Set, error) {
-			deployment, ok := obj.(*experimental.Deployment)
+			deployment, ok := obj.(*extensions.Deployment)
 			if !ok {
 				return nil, nil, fmt.Errorf("given object is not a deployment.")
 			}

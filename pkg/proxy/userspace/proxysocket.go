@@ -28,7 +28,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/proxy"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/runtime"
 )
 
 // Abstraction over TCP/UDP sockets which are proxied.
@@ -73,7 +73,7 @@ func newProxySocket(protocol api.Protocol, ip net.IP, port int) (proxySocket, er
 }
 
 // How long we wait for a connection to a backend in seconds
-var endpointDialTimeout = []time.Duration{1, 2, 4, 8}
+var endpointDialTimeout = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
 
 // tcpProxySocket implements proxySocket.  Close() is implemented by net.Listener.  When Close() is called,
 // no new connections are allowed but existing connections are left untouched.
@@ -87,7 +87,7 @@ func (tcp *tcpProxySocket) ListenPort() int {
 }
 
 func tryConnect(service proxy.ServicePortName, srcAddr net.Addr, protocol string, proxier *Proxier) (out net.Conn, err error) {
-	for _, retryTimeout := range endpointDialTimeout {
+	for _, dialTimeout := range endpointDialTimeout {
 		endpoint, err := proxier.loadBalancer.NextEndpoint(service, srcAddr)
 		if err != nil {
 			glog.Errorf("Couldn't find an endpoint for %s: %v", service, err)
@@ -96,7 +96,7 @@ func tryConnect(service proxy.ServicePortName, srcAddr net.Addr, protocol string
 		glog.V(3).Infof("Mapped service %q to endpoint %s", service, endpoint)
 		// TODO: This could spin up a new goroutine to make the outbound connection,
 		// and keep accepting inbound traffic.
-		outConn, err := net.DialTimeout(protocol, endpoint, retryTimeout*time.Second)
+		outConn, err := net.DialTimeout(protocol, endpoint, dialTimeout)
 		if err != nil {
 			if isTooManyFDsError(err) {
 				panic("Dial failed: " + err.Error())
@@ -153,8 +153,6 @@ func proxyTCP(in, out *net.TCPConn) {
 	go copyBytes("from backend", in, out, &wg)
 	go copyBytes("to backend", out, in, &wg)
 	wg.Wait()
-	in.Close()
-	out.Close()
 }
 
 func copyBytes(direction string, dest, src *net.TCPConn, wg *sync.WaitGroup) {
@@ -162,11 +160,13 @@ func copyBytes(direction string, dest, src *net.TCPConn, wg *sync.WaitGroup) {
 	glog.V(4).Infof("Copying %s: %s -> %s", direction, src.RemoteAddr(), dest.RemoteAddr())
 	n, err := io.Copy(dest, src)
 	if err != nil {
-		glog.Errorf("I/O error: %v", err)
+		if !isClosedError(err) {
+			glog.Errorf("I/O error: %v", err)
+		}
 	}
 	glog.V(4).Infof("Copied %d bytes %s: %s -> %s", n, direction, src.RemoteAddr(), dest.RemoteAddr())
-	dest.CloseWrite()
-	src.CloseRead()
+	dest.Close()
+	src.Close()
 }
 
 // udpProxySocket implements proxySocket.  Close() is implemented by net.UDPConn.  When Close() is called,
@@ -259,7 +259,7 @@ func (udp *udpProxySocket) getBackendConn(activeClients *clientCache, cliAddr ne
 		}
 		activeClients.clients[cliAddr.String()] = svrConn
 		go func(cliAddr net.Addr, svrConn net.Conn, activeClients *clientCache, timeout time.Duration) {
-			defer util.HandleCrash()
+			defer runtime.HandleCrash()
 			udp.proxyClient(cliAddr, svrConn, activeClients, timeout)
 		}(cliAddr, svrConn, activeClients, timeout)
 	}

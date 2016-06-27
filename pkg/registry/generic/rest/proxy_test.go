@@ -18,19 +18,39 @@ package rest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/websocket"
 
 	"k8s.io/kubernetes/pkg/util/proxy"
 )
+
+type fakeResponder struct {
+	called bool
+	err    error
+}
+
+func (r *fakeResponder) Error(err error) {
+	if r.called {
+		panic("called twice")
+	}
+	r.called = true
+	r.err = err
+}
 
 type SimpleBackendHandler struct {
 	requestURL     url.URL
@@ -109,12 +129,23 @@ func TestServeHTTP(t *testing.T) {
 		responseHeader        map[string]string
 		expectedRespHeader    map[string]string
 		notExpectedRespHeader []string
+		upgradeRequired       bool
+		expectError           func(err error) bool
 	}{
 		{
 			name:         "root path, simple get",
 			method:       "GET",
 			requestPath:  "/",
 			expectedPath: "/",
+		},
+		{
+			name:            "no upgrade header sent",
+			method:          "GET",
+			requestPath:     "/",
+			upgradeRequired: true,
+			expectError: func(err error) bool {
+				return err != nil && strings.Contains(err.Error(), "Upgrade request required")
+			},
 		},
 		{
 			name:         "simple path, get",
@@ -162,7 +193,7 @@ func TestServeHTTP(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
+	for i, test := range tests {
 		func() {
 			backendResponse := "<html><head></head><body><a href=\"/test/path\">Hello</a></body></html>"
 			backendResponseHeader := test.responseHeader
@@ -176,15 +207,20 @@ func TestServeHTTP(t *testing.T) {
 				responseHeader: backendResponseHeader,
 			}
 			backendServer := httptest.NewServer(backendHandler)
-			defer backendServer.Close()
+			// TODO: Uncomment when fix #19254
+			// defer backendServer.Close()
 
+			responder := &fakeResponder{}
 			backendURL, _ := url.Parse(backendServer.URL)
 			backendURL.Path = test.requestPath
 			proxyHandler := &UpgradeAwareProxyHandler{
-				Location: backendURL,
+				Location:        backendURL,
+				Responder:       responder,
+				UpgradeRequired: test.upgradeRequired,
 			}
 			proxyServer := httptest.NewServer(proxyHandler)
-			defer proxyServer.Close()
+			// TODO: Uncomment when fix #19254
+			// defer proxyServer.Close()
 			proxyURL, _ := url.Parse(proxyServer.URL)
 			proxyURL.Path = test.requestPath
 			paramValues := url.Values{}
@@ -211,6 +247,17 @@ func TestServeHTTP(t *testing.T) {
 			res, err := client.Do(req)
 			if err != nil {
 				t.Errorf("Error from proxy request: %v", err)
+			}
+
+			if test.expectError != nil {
+				if !responder.called {
+					t.Errorf("%d: responder was not invoked", i)
+					return
+				}
+				if !test.expectError(responder.err) {
+					t.Errorf("%d: unexpected error: %v", i, responder.err)
+				}
+				return
 			}
 
 			// Validate backend request
@@ -252,9 +299,8 @@ func TestServeHTTP(t *testing.T) {
 			}
 
 			// Error
-			err = proxyHandler.RequestError()
-			if err != nil {
-				t.Errorf("Unexpected proxy handler error: %v", err)
+			if responder.called {
+				t.Errorf("Unexpected proxy handler error: %v", responder.err)
 			}
 		}()
 	}
@@ -305,6 +351,21 @@ func TestProxyUpgrade(t *testing.T) {
 			},
 			ProxyTransport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: localhostPool}},
 		},
+		"https (valid hostname + RootCAs + custom dialer)": {
+			ServerFunc: func(h http.Handler) *httptest.Server {
+				cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+				if err != nil {
+					t.Errorf("https (valid hostname): proxy_test: %v", err)
+				}
+				ts := httptest.NewUnstartedServer(h)
+				ts.TLS = &tls.Config{
+					Certificates: []tls.Certificate{cert},
+				}
+				ts.StartTLS()
+				return ts
+			},
+			ProxyTransport: &http.Transport{Dial: net.Dial, TLSClientConfig: &tls.Config{RootCAs: localhostPool}},
+		},
 	}
 
 	for k, tc := range testcases {
@@ -315,7 +376,8 @@ func TestProxyUpgrade(t *testing.T) {
 			ws.Read(body)
 			ws.Write([]byte("hello " + string(body)))
 		}))
-		defer backendServer.Close()
+		// TODO: Uncomment when fix #19254
+		// defer backendServer.Close()
 
 		serverURL, _ := url.Parse(backendServer.URL)
 		proxyHandler := &UpgradeAwareProxyHandler{
@@ -323,7 +385,8 @@ func TestProxyUpgrade(t *testing.T) {
 			Transport: tc.ProxyTransport,
 		}
 		proxy := httptest.NewServer(proxyHandler)
-		defer proxy.Close()
+		// TODO: Uncomment when fix #19254
+		// defer proxy.Close()
 
 		ws, err := websocket.Dial("ws://"+proxy.Listener.Addr().String()+"/some/path", "", "http://127.0.0.1/")
 		if err != nil {
@@ -388,7 +451,7 @@ func TestDefaultProxyTransport(t *testing.T) {
 		h := UpgradeAwareProxyHandler{
 			Location: locURL,
 		}
-		result := h.defaultProxyTransport(URL)
+		result := h.defaultProxyTransport(URL, nil)
 		transport := result.(*corsRemovingTransport).RoundTripper.(*proxy.Transport)
 		if transport.Scheme != test.expectedScheme {
 			t.Errorf("%s: unexpected scheme. Actual: %s, Expected: %s", test.name, transport.Scheme, test.expectedScheme)
@@ -398,6 +461,223 @@ func TestDefaultProxyTransport(t *testing.T) {
 		}
 		if transport.PathPrepend != test.expectedPathPrepend {
 			t.Errorf("%s: unexpected path prepend. Actual: %s, Expected: %s", test.name, transport.PathPrepend, test.expectedPathPrepend)
+		}
+	}
+}
+
+func TestProxyRequestContentLengthAndTransferEncoding(t *testing.T) {
+	chunk := func(data []byte) []byte {
+		out := &bytes.Buffer{}
+		chunker := httputil.NewChunkedWriter(out)
+		for _, b := range data {
+			if _, err := chunker.Write([]byte{b}); err != nil {
+				panic(err)
+			}
+		}
+		chunker.Close()
+		out.Write([]byte("\r\n"))
+		return out.Bytes()
+	}
+
+	zip := func(data []byte) []byte {
+		out := &bytes.Buffer{}
+		zipper := gzip.NewWriter(out)
+		if _, err := zipper.Write(data); err != nil {
+			panic(err)
+		}
+		zipper.Close()
+		return out.Bytes()
+	}
+
+	sampleData := []byte("abcde")
+
+	table := map[string]struct {
+		reqHeaders http.Header
+		reqBody    []byte
+
+		expectedHeaders http.Header
+		expectedBody    []byte
+	}{
+		"content-length": {
+			reqHeaders: http.Header{
+				"Content-Length": []string{"5"},
+			},
+			reqBody: sampleData,
+
+			expectedHeaders: http.Header{
+				"Content-Length":    []string{"5"},
+				"Content-Encoding":  nil, // none set
+				"Transfer-Encoding": nil, // none set
+			},
+			expectedBody: sampleData,
+		},
+
+		"content-length + identity transfer-encoding": {
+			reqHeaders: http.Header{
+				"Content-Length":    []string{"5"},
+				"Transfer-Encoding": []string{"identity"},
+			},
+			reqBody: sampleData,
+
+			expectedHeaders: http.Header{
+				"Content-Length":    []string{"5"},
+				"Content-Encoding":  nil, // none set
+				"Transfer-Encoding": nil, // gets removed
+			},
+			expectedBody: sampleData,
+		},
+
+		"content-length + gzip content-encoding": {
+			reqHeaders: http.Header{
+				"Content-Length":   []string{strconv.Itoa(len(zip(sampleData)))},
+				"Content-Encoding": []string{"gzip"},
+			},
+			reqBody: zip(sampleData),
+
+			expectedHeaders: http.Header{
+				"Content-Length":    []string{strconv.Itoa(len(zip(sampleData)))},
+				"Content-Encoding":  []string{"gzip"},
+				"Transfer-Encoding": nil, // none set
+			},
+			expectedBody: zip(sampleData),
+		},
+
+		"chunked transfer-encoding": {
+			reqHeaders: http.Header{
+				"Transfer-Encoding": []string{"chunked"},
+			},
+			reqBody: chunk(sampleData),
+
+			expectedHeaders: http.Header{
+				"Content-Length":    nil, // none set
+				"Content-Encoding":  nil, // none set
+				"Transfer-Encoding": nil, // Transfer-Encoding gets removed
+			},
+			expectedBody: sampleData, // sample data is unchunked
+		},
+
+		"chunked transfer-encoding + gzip content-encoding": {
+			reqHeaders: http.Header{
+				"Content-Encoding":  []string{"gzip"},
+				"Transfer-Encoding": []string{"chunked"},
+			},
+			reqBody: chunk(zip(sampleData)),
+
+			expectedHeaders: http.Header{
+				"Content-Length":    nil, // none set
+				"Content-Encoding":  []string{"gzip"},
+				"Transfer-Encoding": nil, // gets removed
+			},
+			expectedBody: zip(sampleData), // sample data is unchunked, but content-encoding is preserved
+		},
+
+		// "Transfer-Encoding: gzip" is not supported by go
+		// See http/transfer.go#fixTransferEncoding (https://golang.org/src/net/http/transfer.go#L427)
+		// Once it is supported, this test case should succeed
+		//
+		// "gzip+chunked transfer-encoding": {
+		// 	reqHeaders: http.Header{
+		// 		"Transfer-Encoding": []string{"chunked,gzip"},
+		// 	},
+		// 	reqBody: chunk(zip(sampleData)),
+		//
+		// 	expectedHeaders: http.Header{
+		// 		"Content-Length":    nil, // no content-length headers
+		// 		"Transfer-Encoding": nil, // Transfer-Encoding gets removed
+		// 	},
+		// 	expectedBody: sampleData,
+		// },
+	}
+
+	successfulResponse := "backend passed tests"
+	for k, item := range table {
+		// Start the downstream server
+		downstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// Verify headers
+			for header, v := range item.expectedHeaders {
+				if !reflect.DeepEqual(v, req.Header[header]) {
+					t.Errorf("%s: Expected headers for %s to be %v, got %v", k, header, v, req.Header[header])
+				}
+			}
+
+			// Read body
+			body, err := ioutil.ReadAll(req.Body)
+			if err != nil {
+				t.Errorf("%s: unexpected error %v", k, err)
+			}
+			req.Body.Close()
+
+			// Verify length
+			if req.ContentLength > 0 && req.ContentLength != int64(len(body)) {
+				t.Errorf("%s: ContentLength was %d, len(data) was %d", k, req.ContentLength, len(body))
+			}
+
+			// Verify content
+			if !bytes.Equal(item.expectedBody, body) {
+				t.Errorf("%s: Expected %q, got %q", k, string(item.expectedBody), string(body))
+			}
+
+			// Write successful response
+			w.Write([]byte(successfulResponse))
+		}))
+		// TODO: Uncomment when fix #19254
+		// defer downstreamServer.Close()
+
+		responder := &fakeResponder{}
+		backendURL, _ := url.Parse(downstreamServer.URL)
+		proxyHandler := &UpgradeAwareProxyHandler{
+			Location:        backendURL,
+			Responder:       responder,
+			UpgradeRequired: false,
+		}
+		proxyServer := httptest.NewServer(proxyHandler)
+		// TODO: Uncomment when fix #19254
+		// defer proxyServer.Close()
+
+		// Dial the proxy server
+		conn, err := net.Dial(proxyServer.Listener.Addr().Network(), proxyServer.Listener.Addr().String())
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", err)
+			continue
+		}
+		defer conn.Close()
+
+		// Add standard http 1.1 headers
+		if item.reqHeaders == nil {
+			item.reqHeaders = http.Header{}
+		}
+		item.reqHeaders.Add("Connection", "close")
+		item.reqHeaders.Add("Host", proxyServer.Listener.Addr().String())
+
+		// Write the request headers
+		if _, err := fmt.Fprint(conn, "POST / HTTP/1.1\r\n"); err != nil {
+			t.Fatalf("%s: unexpected error %v", err)
+		}
+		for header, values := range item.reqHeaders {
+			for _, value := range values {
+				if _, err := fmt.Fprintf(conn, "%s: %s\r\n", header, value); err != nil {
+					t.Fatalf("%s: unexpected error %v", err)
+				}
+			}
+		}
+		// Header separator
+		if _, err := fmt.Fprint(conn, "\r\n"); err != nil {
+			t.Fatalf("%s: unexpected error %v", err)
+		}
+		// Body
+		if _, err := conn.Write(item.reqBody); err != nil {
+			t.Fatalf("%s: unexpected error %v", err)
+		}
+
+		// Read response
+		response, err := ioutil.ReadAll(conn)
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", err)
+			continue
+		}
+		if !strings.HasSuffix(string(response), successfulResponse) {
+			t.Errorf("%s: Did not get successful response: %s", k, string(response))
+			continue
 		}
 	}
 }

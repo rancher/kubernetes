@@ -17,6 +17,8 @@ limitations under the License.
 package authorizer
 
 import (
+	"net/http"
+
 	"k8s.io/kubernetes/pkg/auth/user"
 )
 
@@ -48,6 +50,13 @@ type Attributes interface {
 
 	// The group of the resource, if a request is for a REST object.
 	GetAPIGroup() string
+
+	// IsResourceRequest returns true for requests to API resources, like /api/v1/nodes,
+	// and false for non-resource endpoints like /api, /healthz, and /swaggerapi
+	IsResourceRequest() bool
+
+	// GetPath returns the path of the request
+	GetPath() string
 }
 
 // Authorizer makes an authorization decision based on information gained by making
@@ -63,13 +72,20 @@ func (f AuthorizerFunc) Authorize(a Attributes) error {
 	return f(a)
 }
 
+// RequestAttributesGetter provides a function that extracts Attributes from an http.Request
+type RequestAttributesGetter interface {
+	GetRequestAttributes(user.Info, *http.Request) Attributes
+}
+
 // AttributesRecord implements Attributes interface.
 type AttributesRecord struct {
-	User      user.Info
-	Verb      string
-	Namespace string
-	APIGroup  string
-	Resource  string
+	User            user.Info
+	Verb            string
+	Namespace       string
+	APIGroup        string
+	Resource        string
+	ResourceRequest bool
+	Path            string
 }
 
 func (a AttributesRecord) GetUserName() string {
@@ -98,4 +114,12 @@ func (a AttributesRecord) GetResource() string {
 
 func (a AttributesRecord) GetAPIGroup() string {
 	return a.APIGroup
+}
+
+func (a AttributesRecord) IsResourceRequest() bool {
+	return a.ResourceRequest
+}
+
+func (a AttributesRecord) GetPath() string {
+	return a.Path
 }

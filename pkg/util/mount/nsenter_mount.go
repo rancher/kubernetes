@@ -48,7 +48,7 @@ import (
 // 5.  The volume path used by the Kubelet must be the same inside and outside
 //     the container and be writable by the container (to initialize volume)
 //     contents. TODO: remove this requirement.
-// 6.  The host image must have mount, findmnt, and umount binaries in /bin,
+// 6.  The host image must have mount, stat, and umount binaries in /bin,
 //     /usr/sbin, or /usr/bin
 //
 // For more information about mount propagation modes, see:
@@ -61,9 +61,9 @@ type NsenterMounter struct {
 func NewNsenterMounter() *NsenterMounter {
 	m := &NsenterMounter{
 		paths: map[string]string{
-			"mount":   "",
-			"findmnt": "",
-			"umount":  "",
+			"mount":  "",
+			"stat":   "",
+			"umount": "",
 		},
 	}
 	// search for the mount command in other locations besides /usr/bin
@@ -118,7 +118,7 @@ func (n *NsenterMounter) doNsenterMount(source, target, fstype string, options [
 	exec := exec.New()
 	outputBytes, err := exec.Command(nsenterPath, args...).CombinedOutput()
 	if len(outputBytes) != 0 {
-		glog.V(5).Infof("Output from mount command: %v", string(outputBytes))
+		glog.V(5).Infof("Output of mounting %s to %s: %v", source, target, string(outputBytes))
 	}
 
 	return err
@@ -151,7 +151,7 @@ func (n *NsenterMounter) Unmount(target string) error {
 	exec := exec.New()
 	outputBytes, err := exec.Command(nsenterPath, args...).CombinedOutput()
 	if len(outputBytes) != 0 {
-		glog.V(5).Infof("Output from mount command: %v", string(outputBytes))
+		glog.V(5).Infof("Output of unmounting %s: %v", target, string(outputBytes))
 	}
 
 	return err
@@ -162,11 +162,17 @@ func (*NsenterMounter) List() ([]MountPoint, error) {
 	return listProcMounts(hostProcMountsPath)
 }
 
-// IsLikelyNotMountPoint determines whether a path is a mountpoint by calling findmnt
+// IsLikelyNotMountPoint determines whether a path is a mountpoint by calling stat
 // in the host's root mount namespace.
 func (n *NsenterMounter) IsLikelyNotMountPoint(file string) (bool, error) {
 	file, err := filepath.Abs(file)
 	if err != nil {
+		return true, err
+	}
+
+	// Check the directory exists
+	if _, err = os.Stat(file); os.IsNotExist(err) {
+		glog.V(5).Infof("findmnt: directory %s does not exist", file)
 		return true, err
 	}
 
@@ -176,13 +182,15 @@ func (n *NsenterMounter) IsLikelyNotMountPoint(file string) (bool, error) {
 	exec := exec.New()
 	out, err := exec.Command(nsenterPath, args...).CombinedOutput()
 	if err != nil {
-		// If the command itself is correct, then if we encountered error
-		// then most likely this means that the directory does not exist.
-		return true, os.ErrNotExist
+		glog.V(2).Infof("Failed findmnt command for path %s: %v", file, err)
+		// Different operating systems behave differently for paths which are not mount points.
+		// On older versions (e.g. 2.20.1) we'd get error, on newer ones (e.g. 2.26.2) we'd get "/".
+		// It's safer to assume that it's not a mount point.
+		return true, nil
 	}
 	strOut := strings.TrimSuffix(string(out), "\n")
 
-	glog.V(5).Infof("IsLikelyNotMountPoint findmnt output: %v", strOut)
+	glog.V(5).Infof("IsLikelyNotMountPoint findmnt output for path %s: %v", file, strOut)
 	if strOut == file {
 		return false, nil
 	}

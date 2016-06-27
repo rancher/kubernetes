@@ -33,24 +33,28 @@ type idleAwareFramer struct {
 	conn           *Connection
 	writeLock      sync.Mutex
 	resetChan      chan struct{}
+	setTimeoutLock sync.Mutex
 	setTimeoutChan chan time.Duration
 	timeout        time.Duration
 }
 
 func newIdleAwareFramer(framer *spdy.Framer) *idleAwareFramer {
 	iaf := &idleAwareFramer{
-		f:              framer,
-		resetChan:      make(chan struct{}, 2),
-		setTimeoutChan: make(chan time.Duration),
+		f:         framer,
+		resetChan: make(chan struct{}, 2),
+		// setTimeoutChan needs to be buffered to avoid deadlocks when calling setIdleTimeout at about
+		// the same time the connection is being closed
+		setTimeoutChan: make(chan time.Duration, 1),
 	}
 	return iaf
 }
 
 func (i *idleAwareFramer) monitor() {
 	var (
-		timer     *time.Timer
-		expired   <-chan time.Time
-		resetChan = i.resetChan
+		timer          *time.Timer
+		expired        <-chan time.Time
+		resetChan      = i.resetChan
+		setTimeoutChan = i.setTimeoutChan
 	)
 Loop:
 	for {
@@ -103,10 +107,20 @@ Loop:
 				}
 			}()
 
+			go func() {
+				for _ = range setTimeoutChan {
+				}
+			}()
+
 			i.writeLock.Lock()
 			close(resetChan)
 			i.resetChan = nil
 			i.writeLock.Unlock()
+
+			i.setTimeoutLock.Lock()
+			close(i.setTimeoutChan)
+			i.setTimeoutChan = nil
+			i.setTimeoutLock.Unlock()
 
 			break Loop
 		}
@@ -148,6 +162,17 @@ func (i *idleAwareFramer) ReadFrame() (spdy.Frame, error) {
 	return frame, nil
 }
 
+func (i *idleAwareFramer) setIdleTimeout(timeout time.Duration) {
+	i.setTimeoutLock.Lock()
+	defer i.setTimeoutLock.Unlock()
+
+	if i.setTimeoutChan == nil {
+		return
+	}
+
+	i.setTimeoutChan <- timeout
+}
+
 type Connection struct {
 	conn   net.Conn
 	framer *idleAwareFramer
@@ -174,6 +199,9 @@ type Connection struct {
 	shutdownLock sync.Mutex
 	shutdownChan chan error
 	hasShutdown  bool
+
+	// for testing https://github.com/docker/spdystream/pull/56
+	dataFrameHandler func(*spdy.DataFrame) error
 }
 
 // NewConnection creates a new spdy connection from an existing
@@ -219,6 +247,7 @@ func NewConnection(conn net.Conn, server bool) (*Connection, error) {
 
 		shutdownChan: make(chan error),
 	}
+	session.dataFrameHandler = session.handleDataFrame
 	idleAwareFramer.conn = session
 	go idleAwareFramer.monitor()
 
@@ -262,28 +291,43 @@ func (s *Connection) Ping() (time.Duration, error) {
 // which are needed to fully initiate connections.  Both clients and servers
 // should call Serve in a separate goroutine before creating streams.
 func (s *Connection) Serve(newHandler StreamHandler) {
+	// use a WaitGroup to wait for all frames to be drained after receiving
+	// go-away.
+	var wg sync.WaitGroup
+
 	// Parition queues to ensure stream frames are handled
 	// by the same worker, ensuring order is maintained
 	frameQueues := make([]*PriorityFrameQueue, FRAME_WORKERS)
 	for i := 0; i < FRAME_WORKERS; i++ {
 		frameQueues[i] = NewPriorityFrameQueue(QUEUE_SIZE)
+
 		// Ensure frame queue is drained when connection is closed
 		go func(frameQueue *PriorityFrameQueue) {
 			<-s.closeChan
 			frameQueue.Drain()
 		}(frameQueues[i])
 
-		go s.frameHandler(frameQueues[i], newHandler)
+		wg.Add(1)
+		go func(frameQueue *PriorityFrameQueue) {
+			// let the WaitGroup know this worker is done
+			defer wg.Done()
+
+			s.frameHandler(frameQueue, newHandler)
+		}(frameQueues[i])
 	}
 
-	var partitionRoundRobin int
+	var (
+		partitionRoundRobin int
+		goAwayFrame         *spdy.GoAwayFrame
+	)
+Loop:
 	for {
 		readFrame, err := s.framer.ReadFrame()
 		if err != nil {
 			if err != io.EOF {
 				fmt.Errorf("frame read error: %s", err)
 			} else {
-				debugMessage("EOF received")
+				debugMessage("(%p) EOF received", s)
 			}
 			break
 		}
@@ -317,9 +361,9 @@ func (s *Connection) Serve(newHandler StreamHandler) {
 			partition = partitionRoundRobin
 			partitionRoundRobin = (partitionRoundRobin + 1) % FRAME_WORKERS
 		case *spdy.GoAwayFrame:
-			priority = 0
-			partition = partitionRoundRobin
-			partitionRoundRobin = (partitionRoundRobin + 1) % FRAME_WORKERS
+			// hold on to the go away frame and exit the loop
+			goAwayFrame = frame
+			break Loop
 		default:
 			priority = 7
 			partition = partitionRoundRobin
@@ -329,6 +373,15 @@ func (s *Connection) Serve(newHandler StreamHandler) {
 	}
 	close(s.closeChan)
 
+	// wait for all frame handler workers to indicate they've drained their queues
+	// before handling the go away frame
+	wg.Wait()
+
+	if goAwayFrame != nil {
+		s.handleGoAwayFrame(goAwayFrame)
+	}
+
+	// now it's safe to close remote channels and empty s.streams
 	s.streamCond.L.Lock()
 	// notify streams that they're now closed, which will
 	// unblock any stream Read() calls
@@ -354,7 +407,7 @@ func (s *Connection) frameHandler(frameQueue *PriorityFrameQueue, newHandler Str
 		case *spdy.SynReplyFrame:
 			frameErr = s.handleReplyFrame(frame)
 		case *spdy.DataFrame:
-			frameErr = s.handleDataFrame(frame)
+			frameErr = s.dataFrameHandler(frame)
 		case *spdy.RstStreamFrame:
 			frameErr = s.handleResetFrame(frame)
 		case *spdy.HeadersFrame:
@@ -514,12 +567,12 @@ func (s *Connection) handleDataFrame(frame *spdy.DataFrame) error {
 	debugMessage("(%p) Data frame received for %d", s, frame.StreamId)
 	stream, streamOk := s.getStream(frame.StreamId)
 	if !streamOk {
-		debugMessage("Data frame gone away for %d", frame.StreamId)
+		debugMessage("(%p) Data frame gone away for %d", s, frame.StreamId)
 		// Stream has already gone away
 		return nil
 	}
 	if !stream.replied {
-		debugMessage("Data frame not replied %d", frame.StreamId)
+		debugMessage("(%p) Data frame not replied %d", s, frame.StreamId)
 		// No reply received...Protocol error?
 		return nil
 	}
@@ -767,7 +820,7 @@ func (s *Connection) SetCloseTimeout(timeout time.Duration) {
 // SetIdleTimeout sets the amount of time the connection may sit idle before
 // it is forcefully terminated.
 func (s *Connection) SetIdleTimeout(timeout time.Duration) {
-	s.framer.setTimeoutChan <- timeout
+	s.framer.setIdleTimeout(timeout)
 }
 
 func (s *Connection) sendHeaders(headers http.Header, stream *Stream, fin bool) error {
@@ -871,7 +924,7 @@ func (s *Connection) addStream(stream *Stream) {
 func (s *Connection) removeStream(stream *Stream) {
 	s.streamCond.L.Lock()
 	delete(s.streams, stream.streamId)
-	debugMessage("Stream removed, broadcasting: %d", stream.streamId)
+	debugMessage("(%p) (%p) Stream removed, broadcasting: %d", s, stream, stream.streamId)
 	s.streamCond.Broadcast()
 	s.streamCond.L.Unlock()
 }

@@ -19,13 +19,16 @@ package storage
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -39,8 +42,15 @@ func makeTestPod(name string, resourceVersion uint64) *api.Pod {
 	}
 }
 
+// newTestWatchCache just adds a fake clock.
+func newTestWatchCache(capacity int) *watchCache {
+	wc := newWatchCache(capacity)
+	wc.clock = util.NewFakeClock(time.Now())
+	return wc
+}
+
 func TestWatchCacheBasic(t *testing.T) {
-	store := newWatchCache(2)
+	store := newTestWatchCache(2)
 
 	// Test Add/Update/Delete.
 	pod1 := makeTestPod("pod", 1)
@@ -110,15 +120,18 @@ func TestWatchCacheBasic(t *testing.T) {
 }
 
 func TestEvents(t *testing.T) {
-	store := newWatchCache(5)
+	store := newTestWatchCache(5)
 
-	store.Add(makeTestPod("pod", 2))
+	store.Add(makeTestPod("pod", 3))
 
 	// Test for Added event.
 	{
 		_, err := store.GetAllEventsSince(1)
 		if err == nil {
 			t.Errorf("expected error too old")
+		}
+		if _, ok := err.(*errors.StatusError); !ok {
+			t.Errorf("expected error to be of type StatusError")
 		}
 	}
 	{
@@ -132,7 +145,7 @@ func TestEvents(t *testing.T) {
 		if result[0].Type != watch.Added {
 			t.Errorf("unexpected event type: %v", result[0].Type)
 		}
-		pod := makeTestPod("pod", uint64(2))
+		pod := makeTestPod("pod", uint64(3))
 		if !api.Semantic.DeepEqual(pod, result[0].Object) {
 			t.Errorf("unexpected item: %v, expected: %v", result[0].Object, pod)
 		}
@@ -141,8 +154,8 @@ func TestEvents(t *testing.T) {
 		}
 	}
 
-	store.Update(makeTestPod("pod", 3))
 	store.Update(makeTestPod("pod", 4))
+	store.Update(makeTestPod("pod", 5))
 
 	// Test with not full cache.
 	{
@@ -163,22 +176,22 @@ func TestEvents(t *testing.T) {
 			if result[i].Type != watch.Modified {
 				t.Errorf("unexpected event type: %v", result[i].Type)
 			}
-			pod := makeTestPod("pod", uint64(i+3))
+			pod := makeTestPod("pod", uint64(i+4))
 			if !api.Semantic.DeepEqual(pod, result[i].Object) {
 				t.Errorf("unexpected item: %v, expected: %v", result[i].Object, pod)
 			}
-			prevPod := makeTestPod("pod", uint64(i+2))
+			prevPod := makeTestPod("pod", uint64(i+3))
 			if !api.Semantic.DeepEqual(prevPod, result[i].PrevObject) {
 				t.Errorf("unexpected item: %v, expected: %v", result[i].PrevObject, prevPod)
 			}
 		}
 	}
 
-	for i := 5; i < 9; i++ {
+	for i := 6; i < 10; i++ {
 		store.Update(makeTestPod("pod", uint64(i)))
 	}
 
-	// Test with full cache - there should be elements from 4 to 8.
+	// Test with full cache - there should be elements from 5 to 9.
 	{
 		_, err := store.GetAllEventsSince(3)
 		if err == nil {
@@ -194,7 +207,7 @@ func TestEvents(t *testing.T) {
 			t.Fatalf("unexpected events: %v", result)
 		}
 		for i := 0; i < 5; i++ {
-			pod := makeTestPod("pod", uint64(i+4))
+			pod := makeTestPod("pod", uint64(i+5))
 			if !api.Semantic.DeepEqual(pod, result[i].Object) {
 				t.Errorf("unexpected item: %v, expected: %v", result[i].Object, pod)
 			}
@@ -202,7 +215,7 @@ func TestEvents(t *testing.T) {
 	}
 
 	// Test for delete event.
-	store.Delete(makeTestPod("pod", uint64(9)))
+	store.Delete(makeTestPod("pod", uint64(10)))
 
 	{
 		result, err := store.GetAllEventsSince(9)
@@ -215,52 +228,105 @@ func TestEvents(t *testing.T) {
 		if result[0].Type != watch.Deleted {
 			t.Errorf("unexpected event type: %v", result[0].Type)
 		}
-		pod := makeTestPod("pod", uint64(9))
+		pod := makeTestPod("pod", uint64(10))
 		if !api.Semantic.DeepEqual(pod, result[0].Object) {
 			t.Errorf("unexpected item: %v, expected: %v", result[0].Object, pod)
 		}
-		prevPod := makeTestPod("pod", uint64(8))
+		prevPod := makeTestPod("pod", uint64(9))
 		if !api.Semantic.DeepEqual(prevPod, result[0].PrevObject) {
 			t.Errorf("unexpected item: %v, expected: %v", result[0].PrevObject, prevPod)
 		}
 	}
 }
 
-type testLW struct {
-	ListFunc  func() (runtime.Object, error)
-	WatchFunc func(resourceVersion string) (watch.Interface, error)
+func TestWaitUntilFreshAndList(t *testing.T) {
+	store := newTestWatchCache(3)
+
+	// In background, update the store.
+	go func() {
+		store.Add(makeTestPod("foo", 2))
+		store.Add(makeTestPod("bar", 5))
+	}()
+
+	list, resourceVersion, err := store.WaitUntilFreshAndList(5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resourceVersion != 5 {
+		t.Errorf("unexpected resourceVersion: %v, expected: 5", resourceVersion)
+	}
+	if len(list) != 2 {
+		t.Errorf("unexpected list returned: %#v", list)
+	}
 }
 
-func (t *testLW) List() (runtime.Object, error) { return t.ListFunc() }
-func (t *testLW) Watch(resourceVersion string) (watch.Interface, error) {
-	return t.WatchFunc(resourceVersion)
+func TestWaitUntilFreshAndListTimeout(t *testing.T) {
+	store := newTestWatchCache(3)
+	fc := store.clock.(*util.FakeClock)
+
+	// In background, step clock after the below call starts the timer.
+	go func() {
+		for !fc.HasWaiters() {
+			time.Sleep(time.Millisecond)
+		}
+		fc.Step(MaximumListWait)
+
+		// Add an object to make sure the test would
+		// eventually fail instead of just waiting
+		// forever.
+		time.Sleep(30 * time.Second)
+		store.Add(makeTestPod("bar", 5))
+	}()
+
+	_, _, err := store.WaitUntilFreshAndList(5)
+	if err == nil {
+		t.Fatalf("unexpected lack of timeout error")
+	}
+}
+
+type testLW struct {
+	ListFunc  func(options api.ListOptions) (runtime.Object, error)
+	WatchFunc func(options api.ListOptions) (watch.Interface, error)
+}
+
+func (t *testLW) List(options api.ListOptions) (runtime.Object, error) {
+	return t.ListFunc(options)
+}
+func (t *testLW) Watch(options api.ListOptions) (watch.Interface, error) {
+	return t.WatchFunc(options)
 }
 
 func TestReflectorForWatchCache(t *testing.T) {
-	store := newWatchCache(5)
+	store := newTestWatchCache(5)
 
 	{
-		_, version := store.ListWithVersion()
+		_, version, err := store.WaitUntilFreshAndList(0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if version != 0 {
 			t.Errorf("unexpected resource version: %d", version)
 		}
 	}
 
 	lw := &testLW{
-		WatchFunc: func(rv string) (watch.Interface, error) {
+		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
 			fw := watch.NewFake()
 			go fw.Stop()
 			return fw, nil
 		},
-		ListFunc: func() (runtime.Object, error) {
+		ListFunc: func(options api.ListOptions) (runtime.Object, error) {
 			return &api.PodList{ListMeta: unversioned.ListMeta{ResourceVersion: "10"}}, nil
 		},
 	}
 	r := cache.NewReflector(lw, &api.Pod{}, store, 0)
-	r.ListAndWatch(util.NeverStop)
+	r.ListAndWatch(wait.NeverStop)
 
 	{
-		_, version := store.ListWithVersion()
+		_, version, err := store.WaitUntilFreshAndList(10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if version != 10 {
 			t.Errorf("unexpected resource version: %d", version)
 		}

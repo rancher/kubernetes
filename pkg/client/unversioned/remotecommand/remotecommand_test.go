@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,10 +28,24 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/util/httpstream"
 	"k8s.io/kubernetes/pkg/util/httpstream/spdy"
 )
+
+type streamAndReply struct {
+	httpstream.Stream
+	replySent <-chan struct{}
+}
+
+func waitStreamReply(replySent <-chan struct{}, notify chan<- struct{}, stop <-chan struct{}) {
+	select {
+	case <-replySent:
+		notify <- struct{}{}
+	case <-stop:
+	}
+}
 
 func fakeExecServer(t *testing.T, i int, stdinData, stdoutData, stderrData, errorData string, tty bool, messageCount int) http.HandlerFunc {
 	// error + stdin + stdout
@@ -41,11 +56,18 @@ func fakeExecServer(t *testing.T, i int, stdinData, stdoutData, stderrData, erro
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		streamCh := make(chan httpstream.Stream)
+		protocol, err := httpstream.Handshake(req, w, []string{StreamProtocolV2Name}, StreamProtocolV1Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if protocol != StreamProtocolV2Name {
+			t.Fatalf("unexpected protocol: %s", protocol)
+		}
+		streamCh := make(chan streamAndReply)
 
 		upgrader := spdy.NewResponseUpgrader()
-		conn := upgrader.UpgradeResponse(w, req, func(stream httpstream.Stream) error {
-			streamCh <- stream
+		conn := upgrader.UpgradeResponse(w, req, func(stream httpstream.Stream, replySent <-chan struct{}) error {
+			streamCh <- streamAndReply{Stream: stream, replySent: replySent}
 			return nil
 		})
 		// from this point on, we can no longer call methods on w
@@ -59,6 +81,9 @@ func fakeExecServer(t *testing.T, i int, stdinData, stdoutData, stderrData, erro
 
 		var errorStream, stdinStream, stdoutStream, stderrStream httpstream.Stream
 		receivedStreams := 0
+		replyChan := make(chan struct{})
+		stop := make(chan struct{})
+		defer close(stop)
 	WaitForStreams:
 		for {
 			select {
@@ -67,20 +92,25 @@ func fakeExecServer(t *testing.T, i int, stdinData, stdoutData, stderrData, erro
 				switch streamType {
 				case api.StreamTypeError:
 					errorStream = stream
-					receivedStreams++
+					go waitStreamReply(stream.replySent, replyChan, stop)
 				case api.StreamTypeStdin:
 					stdinStream = stream
-					receivedStreams++
+					go waitStreamReply(stream.replySent, replyChan, stop)
 				case api.StreamTypeStdout:
 					stdoutStream = stream
-					receivedStreams++
+					go waitStreamReply(stream.replySent, replyChan, stop)
 				case api.StreamTypeStderr:
 					stderrStream = stream
-					receivedStreams++
+					go waitStreamReply(stream.replySent, replyChan, stop)
 				default:
 					t.Errorf("%d: unexpected stream type: %q", i, streamType)
 				}
 
+				if receivedStreams == expectedStreams {
+					break WaitForStreams
+				}
+			case <-replyChan:
+				receivedStreams++
 				if receivedStreams == expectedStreams {
 					break WaitForStreams
 				}
@@ -181,14 +211,20 @@ func TestRequestExecuteRemoteCommand(t *testing.T) {
 		server := httptest.NewServer(fakeExecServer(t, i, testCase.Stdin, testCase.Stdout, testCase.Stderr, testCase.Error, testCase.Tty, testCase.MessageCount))
 
 		url, _ := url.ParseRequestURI(server.URL)
-		c := client.NewRESTClient(url, "x", nil, -1, -1)
+		c := restclient.NewRESTClient(url, "", restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "x"}}, -1, -1, nil)
 		req := c.Post().Resource("testing")
-
-		conf := &client.Config{
+		req.SetHeader(httpstream.HeaderProtocolVersion, StreamProtocolV2Name)
+		req.Param("command", "ls")
+		req.Param("command", "/")
+		conf := &restclient.Config{
 			Host: server.URL,
 		}
-		e := New(req, conf, []string{"ls", "/"}, strings.NewReader(strings.Repeat(testCase.Stdin, testCase.MessageCount)), localOut, localErr, testCase.Tty)
-		err := e.Execute()
+		e, err := NewExecutor(conf, "POST", req.URL())
+		if err != nil {
+			t.Errorf("%d: unexpected error: %v", i, err)
+			continue
+		}
+		err = e.Stream(strings.NewReader(strings.Repeat(testCase.Stdin, testCase.MessageCount)), localOut, localErr, testCase.Tty)
 		hasErr := err != nil
 
 		if len(testCase.Error) > 0 {
@@ -200,13 +236,15 @@ func TestRequestExecuteRemoteCommand(t *testing.T) {
 				}
 			}
 
-			server.Close()
+			// TODO: Uncomment when fix #19254
+			// server.Close()
 			continue
 		}
 
 		if hasErr {
 			t.Errorf("%d: unexpected error: %v", i, err)
-			server.Close()
+			// TODO: Uncomment when fix #19254
+			// server.Close()
 			continue
 		}
 
@@ -222,7 +260,8 @@ func TestRequestExecuteRemoteCommand(t *testing.T) {
 			}
 		}
 
-		server.Close()
+		// TODO: Uncomment when fix #19254
+		// server.Close()
 	}
 }
 
@@ -257,14 +296,18 @@ func TestRequestAttachRemoteCommand(t *testing.T) {
 		server := httptest.NewServer(fakeExecServer(t, i, testCase.Stdin, testCase.Stdout, testCase.Stderr, testCase.Error, testCase.Tty, 1))
 
 		url, _ := url.ParseRequestURI(server.URL)
-		c := client.NewRESTClient(url, "x", nil, -1, -1)
+		c := restclient.NewRESTClient(url, "", restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Group: "x"}}, -1, -1, nil)
 		req := c.Post().Resource("testing")
 
-		conf := &client.Config{
+		conf := &restclient.Config{
 			Host: server.URL,
 		}
-		e := NewAttach(req, conf, strings.NewReader(testCase.Stdin), localOut, localErr, testCase.Tty)
-		err := e.Execute()
+		e, err := NewExecutor(conf, "POST", req.URL())
+		if err != nil {
+			t.Errorf("%d: unexpected error: %v", i, err)
+			continue
+		}
+		err = e.Stream(strings.NewReader(testCase.Stdin), localOut, localErr, testCase.Tty)
 		hasErr := err != nil
 
 		if len(testCase.Error) > 0 {
@@ -276,13 +319,15 @@ func TestRequestAttachRemoteCommand(t *testing.T) {
 				}
 			}
 
-			server.Close()
+			// TODO: Uncomment when fix #19254
+			// server.Close()
 			continue
 		}
 
 		if hasErr {
 			t.Errorf("%d: unexpected error: %v", i, err)
-			server.Close()
+			// TODO: Uncomment when fix #19254
+			// server.Close()
 			continue
 		}
 
@@ -298,6 +343,71 @@ func TestRequestAttachRemoteCommand(t *testing.T) {
 			}
 		}
 
-		server.Close()
+		// TODO: Uncomment when fix #19254
+		// server.Close()
 	}
+}
+
+type fakeUpgrader struct {
+	req           *http.Request
+	resp          *http.Response
+	conn          httpstream.Connection
+	err, connErr  error
+	checkResponse bool
+
+	t *testing.T
+}
+
+func (u *fakeUpgrader) RoundTrip(req *http.Request) (*http.Response, error) {
+	u.req = req
+	return u.resp, u.err
+}
+
+func (u *fakeUpgrader) NewConnection(resp *http.Response) (httpstream.Connection, error) {
+	if u.checkResponse && u.resp != resp {
+		u.t.Errorf("response objects passed did not match: %#v", resp)
+	}
+	return u.conn, u.connErr
+}
+
+type fakeConnection struct {
+	httpstream.Connection
+}
+
+// Dial is the common functionality between any stream based upgrader, regardless of protocol.
+// This method ensures that someone can use a generic stream executor without being dependent
+// on the core Kube client config behavior.
+func TestDial(t *testing.T) {
+	upgrader := &fakeUpgrader{
+		t:             t,
+		checkResponse: true,
+		conn:          &fakeConnection{},
+		resp: &http.Response{
+			StatusCode: http.StatusSwitchingProtocols,
+			Body:       ioutil.NopCloser(&bytes.Buffer{}),
+		},
+	}
+	var called bool
+	testFn := func(rt http.RoundTripper) http.RoundTripper {
+		if rt != upgrader {
+			t.Fatalf("unexpected round tripper: %#v", rt)
+		}
+		called = true
+		return rt
+	}
+	exec, err := NewStreamExecutor(upgrader, testFn, "POST", &url.URL{Host: "something.com", Scheme: "https"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, protocol, err := exec.Dial("protocol1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn != upgrader.conn {
+		t.Errorf("unexpected connection: %#v", conn)
+	}
+	if !called {
+		t.Errorf("wrapper not called")
+	}
+	_ = protocol
 }

@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,73 +30,20 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
-const (
-	// version applies to upgrades; kube-push always pushes local binaries.
-	versionURLFmt = "https://storage.googleapis.com/kubernetes-release/%s/%s.txt"
-)
-
-// realVersion turns a version constant s--one accepted by cluster/gce/upgrade.sh--
-// into a deployable version string. If the s is not known to be a version
-// constant, it will assume it is already a valid version, and return s directly.
-//
-// NOTE: KEEP THIS LIST UP-TO-DATE WITH THE CODE BELOW.
-// The version strings supported are:
-// - "latest_stable"   (returns a string like "0.18.2")
-// - "latest_release"  (returns a string like "0.19.1")
-// - "latest_ci"       (returns a string like "0.19.1-669-gabac8c8")
+// realVersion turns a version constant s into a version string deployable on
+// GKE.  See hack/get-build.sh for more information.
 func realVersion(s string) (string, error) {
-	bucket, file := "", ""
-	switch s {
-	// NOTE: IF YOU CHANGE THE FOLLOWING LIST, ALSO UPDATE cluster/gce/upgrade.sh
-	case "latest_stable":
-		bucket, file = "release", "stable"
-	case "latest_release":
-		bucket, file = "release", "latest"
-	case "latest_ci":
-		bucket, file = "ci", "latest"
-	default:
-		// If we don't match one of the above, we assume that the passed version
-		// is already valid (such as "0.19.1" or "0.19.1-669-gabac8c8").
-		Logf("Assuming %q is already a valid version.", s)
-		return s, nil
+	v, _, err := runCmd(path.Join(testContext.RepoRoot, "hack/get-build.sh"), "-v", s)
+	if err != nil {
+		return v, err
 	}
-
-	url := fmt.Sprintf(versionURLFmt, bucket, file)
-	var v string
-	Logf("Fetching version from %s", url)
-	c := &http.Client{Timeout: 2 * time.Second}
-	if err := wait.Poll(poll, singleCallTimeout, func() (bool, error) {
-		r, err := c.Get(url)
-		if err != nil {
-			Logf("Error reaching %s: %v", url, err)
-			return false, nil
-		}
-		if r.StatusCode != http.StatusOK {
-			Logf("Bad response; status: %d, response: %v", r.StatusCode, r)
-			return false, nil
-		}
-		defer r.Body.Close()
-		b, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			Logf("Could not read response body: %v", err)
-			return false, nil
-		}
-		v = strings.TrimSpace(string(b))
-		return true, nil
-	}); err != nil {
-		return "", fmt.Errorf("failed to fetch real version from %s", url)
-	}
-	// Versions start with "v", so remove that.
-	return strings.TrimPrefix(v, "v"), nil
+	return strings.TrimPrefix(strings.TrimSpace(v), "v"), nil
 }
 
 // The following upgrade functions are passed into the framework below and used
@@ -128,17 +74,12 @@ func masterUpgradeGKE(v string) error {
 		"upgrade",
 		testContext.CloudConfig.Cluster,
 		"--master",
-		fmt.Sprintf("--cluster-version=%s", v))
+		fmt.Sprintf("--cluster-version=%s", v),
+		"--quiet")
 	return err
 }
 
-var masterPush = func(_ string) error {
-	// TODO(mikedanese): Make master push use the provided version.
-	_, _, err := runCmd(path.Join(testContext.RepoRoot, "hack/e2e-internal/e2e-push.sh"), "-m")
-	return err
-}
-
-var nodeUpgrade = func(f Framework, replicas int, v string) error {
+var nodeUpgrade = func(f *Framework, replicas int, v string) error {
 	// Perform the upgrade.
 	var err error
 	switch testContext.Provider {
@@ -154,6 +95,9 @@ var nodeUpgrade = func(f Framework, replicas int, v string) error {
 	}
 
 	// Wait for it to complete and validate nodes and pods are healthy.
+	//
+	// TODO(ihmccreery) We shouldn't have to wait for nodes to be ready in
+	// GKE; the operation shouldn't return until they all are.
 	Logf("Waiting up to %v for all nodes to be ready after the upgrade", restartNodeReadyAgainTimeout)
 	if _, err := checkNodesReady(f.Client, restartNodeReadyAgainTimeout, testContext.CloudConfig.NumNodes); err != nil {
 		return err
@@ -163,19 +107,53 @@ var nodeUpgrade = func(f Framework, replicas int, v string) error {
 }
 
 func nodeUpgradeGCE(rawV string) error {
+	// TODO(ihmccreery) This code path should be identical to how a user
+	// would trigger a node update; right now it's very different.
 	v := "v" + rawV
-	Logf("Preparing node upgarde by creating new instance template for %q", v)
+
+	Logf("Getting the node template before the upgrade")
+	tmplBefore, err := migTemplate()
+	if err != nil {
+		return fmt.Errorf("error getting the node template before the upgrade: %v", err)
+	}
+
+	Logf("Preparing node upgrade by creating new instance template for %q", v)
 	stdout, _, err := runCmd(path.Join(testContext.RepoRoot, "hack/e2e-internal/e2e-upgrade.sh"), "-P", v)
 	if err != nil {
-		return err
+		cleanupNodeUpgradeGCE(tmplBefore)
+		return fmt.Errorf("error preparing node upgrade: %v", err)
 	}
 	tmpl := strings.TrimSpace(stdout)
 
 	Logf("Performing a node upgrade to %q; waiting at most %v per node", tmpl, restartPerNodeTimeout)
 	if err := migRollingUpdate(tmpl, restartPerNodeTimeout); err != nil {
+		cleanupNodeUpgradeGCE(tmplBefore)
 		return fmt.Errorf("error doing node upgrade via a migRollingUpdate to %s: %v", tmpl, err)
 	}
 	return nil
+}
+
+func cleanupNodeUpgradeGCE(tmplBefore string) {
+	Logf("Cleaning up any unused node templates")
+	tmplAfter, err := migTemplate()
+	if err != nil {
+		Logf("Could not get node template post-upgrade; may have leaked template %s", tmplBefore)
+		return
+	}
+	if tmplBefore == tmplAfter {
+		// The node upgrade failed so there's no need to delete
+		// anything.
+		Logf("Node template %s is still in use; not cleaning up", tmplBefore)
+		return
+	}
+	Logf("Deleting node template %s", tmplBefore)
+	if _, _, err := retryCmd("gcloud", "compute", "instance-templates",
+		fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
+		"delete",
+		tmplBefore); err != nil {
+		Logf("gcloud compute instance-templates delete %s call failed with err: %v", tmplBefore, err)
+		Logf("May have leaked instance template %q", tmplBefore)
+	}
 }
 
 func nodeUpgradeGKE(v string) error {
@@ -186,160 +164,161 @@ func nodeUpgradeGKE(v string) error {
 		"clusters",
 		"upgrade",
 		testContext.CloudConfig.Cluster,
-		fmt.Sprintf("--cluster-version=%s", v))
+		fmt.Sprintf("--cluster-version=%s", v),
+		"--quiet")
 	return err
 }
 
-var _ = Describe("Skipped", func() {
+var _ = Describe("Upgrade [Feature:Upgrade]", func() {
 
-	Describe("Cluster upgrade", func() {
-		svcName, replicas := "baz", 2
-		var rcName, ip, v string
-		var ingress api.LoadBalancerIngress
-		f := Framework{BaseName: "cluster-upgrade"}
-		var w *WebserverTest
+	svcName, replicas := "baz", 2
+	var rcName, ip, v string
+	var ingress api.LoadBalancerIngress
 
-		BeforeEach(func() {
-			// The version is determined once at the beginning of the test so that
-			// the master and nodes won't be skewed if the value changes during the
-			// test.
-			By(fmt.Sprintf("Getting real version for %q", testContext.UpgradeTarget))
-			var err error
-			v, err = realVersion(testContext.UpgradeTarget)
-			expectNoError(err)
-			Logf("Version for %q is %s", testContext.UpgradeTarget, v)
+	BeforeEach(func() {
+		// The version is determined once at the beginning of the test so that
+		// the master and nodes won't be skewed if the value changes during the
+		// test.
+		By(fmt.Sprintf("Getting real version for %q", testContext.UpgradeTarget))
+		var err error
+		v, err = realVersion(testContext.UpgradeTarget)
+		expectNoError(err)
+		Logf("Version for %q is %q", testContext.UpgradeTarget, v)
+	})
 
-			By("Setting up the service, RC, and pods")
-			f.beforeEach()
-			w = NewWebserverTest(f.Client, f.Namespace.Name, svcName)
-			rc := w.CreateWebserverRC(replicas)
-			rcName = rc.ObjectMeta.Name
-			svc := w.BuildServiceSpec()
-			svc.Spec.Type = api.ServiceTypeLoadBalancer
-			w.CreateService(svc)
+	f := NewDefaultFramework("cluster-upgrade")
+	var w *ServiceTestFixture
+	BeforeEach(func() {
+		By("Setting up the service, RC, and pods")
+		w = NewServerTest(f.Client, f.Namespace.Name, svcName)
+		rc := w.CreateWebserverRC(replicas)
+		rcName = rc.ObjectMeta.Name
+		svc := w.BuildServiceSpec()
+		svc.Spec.Type = api.ServiceTypeLoadBalancer
+		w.CreateService(svc)
 
-			By("Waiting for the service to become reachable")
-			result, err := waitForLoadBalancerIngress(f.Client, svcName, f.Namespace.Name)
-			Expect(err).NotTo(HaveOccurred())
-			ingresses := result.Status.LoadBalancer.Ingress
-			if len(ingresses) != 1 {
-				Failf("Was expecting only 1 ingress IP but got %d (%v): %v", len(ingresses), ingresses, result)
-			}
-			ingress = ingresses[0]
-			Logf("Got load balancer ingress point %v", ingress)
-			ip = ingress.IP
-			if ip == "" {
-				ip = ingress.Hostname
-			}
-			testLoadBalancerReachable(ingress, 80)
+		By("Waiting for the service to become reachable")
+		result, err := waitForLoadBalancerIngress(f.Client, svcName, f.Namespace.Name)
+		Expect(err).NotTo(HaveOccurred())
+		ingresses := result.Status.LoadBalancer.Ingress
+		if len(ingresses) != 1 {
+			Failf("Was expecting only 1 ingress IP but got %d (%v): %v", len(ingresses), ingresses, result)
+		}
+		ingress = ingresses[0]
+		Logf("Got load balancer ingress point %v", ingress)
+		ip = ingress.IP
+		if ip == "" {
+			ip = ingress.Hostname
+		}
+		testLoadBalancerReachable(ingress, 80)
 
-			// TODO(mikedanese): Add setup, validate, and teardown for:
-			//  - secrets
-			//  - volumes
-			//  - persistent volumes
+		// TODO(mikedanese): Add setup, validate, and teardown for:
+		//  - secrets
+		//  - volumes
+		//  - persistent volumes
+	})
+
+	AfterEach(func() {
+		w.Cleanup()
+	})
+
+	Describe("master upgrade", func() {
+		It("should maintain responsive services [Feature:MasterUpgrade]", func() {
+			By("Validating cluster before master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a master upgrade")
+			testUpgrade(ip, v, masterUpgrade)
+			By("Checking master version")
+			expectNoError(checkMasterVersion(f.Client, v))
+			By("Validating cluster after master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+		})
+	})
+
+	Describe("node upgrade", func() {
+		It("should maintain a functioning cluster [Feature:NodeUpgrade]", func() {
+			By("Validating cluster before node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a node upgrade")
+			// Circumnavigate testUpgrade, since services don't necessarily stay up.
+			Logf("Starting upgrade")
+			expectNoError(nodeUpgrade(f, replicas, v))
+			Logf("Upgrade complete")
+			By("Checking node versions")
+			expectNoError(checkNodesVersions(f.Client, v))
+			By("Validating cluster after node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
 		})
 
-		AfterEach(func() {
-			f.afterEach()
-			w.Cleanup()
+		It("should maintain responsive services [Feature:ExperimentalNodeUpgrade]", func() {
+			By("Validating cluster before node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a node upgrade")
+			testUpgrade(ip, v, func(v string) error {
+				return nodeUpgrade(f, replicas, v)
+			})
+			By("Checking node versions")
+			expectNoError(checkNodesVersions(f.Client, v))
+			By("Validating cluster after node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+		})
+	})
+
+	Describe("cluster upgrade", func() {
+		It("should maintain responsive services [Feature:ClusterUpgrade]", func() {
+			By("Validating cluster before master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a master upgrade")
+			testUpgrade(ip, v, masterUpgrade)
+			By("Checking master version")
+			expectNoError(checkMasterVersion(f.Client, v))
+			By("Validating cluster after master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+
+			By("Validating cluster before node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a node upgrade")
+			// Circumnavigate testUpgrade, since services don't necessarily stay up.
+			Logf("Starting upgrade")
+			expectNoError(nodeUpgrade(f, replicas, v))
+			Logf("Upgrade complete")
+			By("Checking node versions")
+			expectNoError(checkNodesVersions(f.Client, v))
+			By("Validating cluster after node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
 		})
 
-		Describe("kube-push", func() {
-			BeforeEach(func() {
-				SkipUnlessProviderIs("gce")
-			})
+		It("should maintain responsive services [Feature:ExperimentalClusterUpgrade]", func() {
+			By("Validating cluster before master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a master upgrade")
+			testUpgrade(ip, v, masterUpgrade)
+			By("Checking master version")
+			expectNoError(checkMasterVersion(f.Client, v))
+			By("Validating cluster after master upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
 
-			It("of master should maintain responsive services", func() {
-				By("Validating cluster before master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-				By("Performing a master upgrade")
-				testMasterUpgrade(ip, v, masterPush)
-				By("Validating cluster after master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Validating cluster before node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
+			By("Performing a node upgrade")
+			testUpgrade(ip, v, func(v string) error {
+				return nodeUpgrade(f, replicas, v)
 			})
-		})
-
-		Describe("upgrade-master", func() {
-			BeforeEach(func() {
-				SkipUnlessProviderIs("gce", "gke")
-			})
-
-			It("should maintain responsive services", func() {
-				By("Validating cluster before master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-				By("Performing a master upgrade")
-				testMasterUpgrade(ip, v, masterUpgrade)
-				By("Checking master version")
-				expectNoError(checkMasterVersion(f.Client, v))
-				By("Validating cluster after master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-			})
-		})
-
-		Describe("upgrade-cluster", func() {
-			var tmplBefore, tmplAfter string
-			BeforeEach(func() {
-				if providerIs("gce") {
-					By("Getting the node template before the upgrade")
-					var err error
-					tmplBefore, err = migTemplate()
-					expectNoError(err)
-				}
-			})
-
-			AfterEach(func() {
-				if providerIs("gce") {
-					By("Cleaning up any unused node templates")
-					var err error
-					tmplAfter, err = migTemplate()
-					if err != nil {
-						Logf("Could not get node template post-upgrade; may have leaked template %s", tmplBefore)
-						return
-					}
-					if tmplBefore == tmplAfter {
-						// The node upgrade failed so there's no need to delete
-						// anything.
-						Logf("Node template %s is still in use; not cleaning up", tmplBefore)
-						return
-					}
-					Logf("Deleting node template %s", tmplBefore)
-					if _, _, err := retryCmd("gcloud", "compute", "instance-templates",
-						fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
-						"delete",
-						tmplBefore); err != nil {
-						Logf("gcloud compute instance-templates delete %s call failed with err: %v", tmplBefore, err)
-						Logf("May have leaked instance template %q", tmplBefore)
-					}
-				}
-			})
-
-			It("should maintain a functioning cluster", func() {
-				SkipUnlessProviderIs("gce", "gke")
-
-				By("Validating cluster before master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-				By("Performing a master upgrade")
-				testMasterUpgrade(ip, v, masterUpgrade)
-				By("Checking master version")
-				expectNoError(checkMasterVersion(f.Client, v))
-				By("Validating cluster after master upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-				By("Performing a node upgrade")
-				testNodeUpgrade(f, nodeUpgrade, replicas, v)
-				By("Validating cluster after node upgrade")
-				expectNoError(validate(f, svcName, rcName, ingress, replicas))
-			})
+			By("Checking node versions")
+			expectNoError(checkNodesVersions(f.Client, v))
+			By("Validating cluster after node upgrade")
+			expectNoError(validate(f, svcName, rcName, ingress, replicas))
 		})
 	})
 })
 
-func testMasterUpgrade(ip, v string, mUp func(v string) error) {
+func testUpgrade(ip, v string, upF func(v string) error) {
 	Logf("Starting async validation")
 	httpClient := http.Client{Timeout: 2 * time.Second}
 	done := make(chan struct{}, 1)
 	// Let's make sure we've finished the heartbeat before shutting things down.
 	var wg sync.WaitGroup
-	go util.Until(func() {
+	go wait.Until(func() {
 		defer GinkgoRecover()
 		wg.Add(1)
 		defer wg.Done()
@@ -360,22 +339,22 @@ func testMasterUpgrade(ip, v string, mUp func(v string) error) {
 			// because this validation runs in another goroutine. Without this,
 			// a failure is very confusing to track down because from the logs
 			// everything looks fine.
-			msg := fmt.Sprintf("Failed to contact service during master upgrade: %v", err)
+			msg := fmt.Sprintf("Failed to contact service during upgrade: %v", err)
 			Logf(msg)
 			Failf(msg)
 		}
 	}, 200*time.Millisecond, done)
 
-	Logf("Starting master upgrade")
-	expectNoError(mUp(v))
+	Logf("Starting upgrade")
+	expectNoError(upF(v))
 	done <- struct{}{}
 	Logf("Stopping async validation")
 	wg.Wait()
-	Logf("Master upgrade complete")
+	Logf("Upgrade complete")
 }
 
 func checkMasterVersion(c *client.Client, want string) error {
-	v, err := c.ServerVersion()
+	v, err := c.Discovery().ServerVersion()
 	if err != nil {
 		return fmt.Errorf("checkMasterVersion() couldn't get the master version: %v", err)
 	}
@@ -391,20 +370,8 @@ func checkMasterVersion(c *client.Client, want string) error {
 	return nil
 }
 
-func testNodeUpgrade(f Framework, nUp func(f Framework, n int, v string) error, replicas int, v string) {
-	Logf("Starting node upgrade")
-	expectNoError(nUp(f, replicas, v))
-	Logf("Node upgrade complete")
-	By("Checking node versions")
-	expectNoError(checkNodesVersions(f.Client, v))
-	Logf("All nodes are at version %s", v)
-}
-
 func checkNodesVersions(c *client.Client, want string) error {
-	l, err := listNodes(c, labels.Everything(), fields.Everything())
-	if err != nil {
-		return fmt.Errorf("checkNodesVersions() failed to list nodes: %v", err)
-	}
+	l := ListSchedulableNodesOrDie(c)
 	for _, n := range l.Items {
 		// We do prefix trimming and then matching because:
 		// want   looks like:  0.19.3-815-g50e67d4
@@ -441,12 +408,15 @@ func retryCmd(command string, args ...string) (string, string, error) {
 
 // runCmd runs cmd using args and returns its stdout and stderr. It also outputs
 // cmd's stdout and stderr to their respective OS streams.
+//
+// TODO(ihmccreery) This function should either be moved into util.go or
+// removed; other e2e's use bare exe.Command.
 func runCmd(command string, args ...string) (string, string, error) {
 	Logf("Running %s %v", command, args)
 	var bout, berr bytes.Buffer
 	cmd := exec.Command(command, args...)
 	// We also output to the OS stdout/stderr to aid in debugging in case cmd
-	// hangs and never retruns before the test gets killed.
+	// hangs and never returns before the test gets killed.
 	cmd.Stdout = io.MultiWriter(os.Stdout, &bout)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &berr)
 	err := cmd.Run()
@@ -458,10 +428,10 @@ func runCmd(command string, args ...string) (string, string, error) {
 	return stdout, stderr, nil
 }
 
-func validate(f Framework, svcNameWant, rcNameWant string, ingress api.LoadBalancerIngress, podsWant int) error {
+func validate(f *Framework, svcNameWant, rcNameWant string, ingress api.LoadBalancerIngress, podsWant int) error {
 	Logf("Beginning cluster validation")
 	// Verify RC.
-	rcs, err := f.Client.ReplicationControllers(f.Namespace.Name).List(labels.Everything())
+	rcs, err := f.Client.ReplicationControllers(f.Namespace.Name).List(api.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("error listing RCs: %v", err)
 	}
@@ -493,7 +463,7 @@ func validate(f Framework, svcNameWant, rcNameWant string, ingress api.LoadBalan
 }
 
 // migRollingUpdate starts a MIG rolling update, upgrading the nodes to a new
-// instance template named tmpl, and waits up to nt times the nubmer of nodes
+// instance template named tmpl, and waits up to nt times the number of nodes
 // for it to complete.
 func migRollingUpdate(tmpl string, nt time.Duration) error {
 	By(fmt.Sprintf("starting the MIG rolling update to %s", tmpl))
@@ -510,7 +480,7 @@ func migRollingUpdate(tmpl string, nt time.Duration) error {
 	return nil
 }
 
-// migTemlate (GCE/GKE-only) returns the name of the MIG template that the
+// migTemplate (GCE-only) returns the name of the MIG template that the
 // nodes of the cluster use.
 func migTemplate() (string, error) {
 	var errLast error
@@ -560,7 +530,7 @@ func migRollingUpdateStart(templ string, nt time.Duration) (string, error) {
 		// NOTE(mikedanese): If you are changing this gcloud command, update
 		//                 cluster/gce/upgrade.sh to match this EXACTLY.
 		// A `rolling-updates start` call outputs what we want to stderr.
-		_, output, err := retryCmd("gcloud", append(migUdpateCmdBase(),
+		_, output, err := retryCmd("gcloud", "alpha", "compute",
 			"rolling-updates",
 			fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
 			fmt.Sprintf("--zone=%s", testContext.CloudConfig.Zone),
@@ -574,7 +544,7 @@ func migRollingUpdateStart(templ string, nt time.Duration) (string, error) {
 			//       --max-num-concurrent-instances.
 			fmt.Sprintf("--max-num-concurrent-instances=%d", 1),
 			fmt.Sprintf("--max-num-failed-instances=%d", 0),
-			fmt.Sprintf("--min-instance-update-time=%ds", 0))...)
+			fmt.Sprintf("--min-instance-update-time=%ds", 0))
 		if err != nil {
 			errLast = fmt.Errorf("rolling-updates call failed with err: %v", err)
 			return false, nil
@@ -602,25 +572,6 @@ func migRollingUpdateStart(templ string, nt time.Duration) (string, error) {
 	return id, nil
 }
 
-// migUpdateCmdBase gets the base of the MIG rolling update command--i.e., all
-// pieces of the gcloud command that come after "gcloud" but before
-// "rolling-updates". Examples of returned values are:
-//
-//   {preview"}
-//
-//   {"alpha", "compute"}
-//
-// TODO(mikedanese): Remove this hack on July 29, 2015 when the migration to
-//                 `gcloud alpha compute rolling-updates` is complete.
-func migUdpateCmdBase() []string {
-	b := []string{"preview"}
-	a := []string{"rolling-updates", "-h"}
-	if err := exec.Command("gcloud", append(b, a...)...).Run(); err != nil {
-		b = []string{"alpha", "compute"}
-	}
-	return b
-}
-
 // migRollingUpdatePoll (CKE/GKE-only) polls the progress of the MIG rolling
 // update with ID id until it is complete. It returns an error if this takes
 // longer than nt times the number of nodes.
@@ -632,12 +583,12 @@ func migRollingUpdatePoll(id string, nt time.Duration) error {
 	Logf("Waiting up to %v for MIG rolling update to complete.", timeout)
 	if wait.Poll(restartPoll, timeout, func() (bool, error) {
 		// A `rolling-updates describe` call outputs what we want to stdout.
-		output, _, err := retryCmd("gcloud", append(migUdpateCmdBase(),
+		output, _, err := retryCmd("gcloud", "alpha", "compute",
 			"rolling-updates",
 			fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
 			fmt.Sprintf("--zone=%s", testContext.CloudConfig.Zone),
 			"describe",
-			id)...)
+			id)
 		if err != nil {
 			errLast = fmt.Errorf("Error calling rolling-updates describe %s: %v", id, err)
 			Logf("%v", errLast)
@@ -658,4 +609,62 @@ func migRollingUpdatePoll(id string, nt time.Duration) error {
 	}
 	Logf("MIG rolling update complete after %v", time.Since(start))
 	return nil
+}
+
+func testLoadBalancerReachable(ingress api.LoadBalancerIngress, port int) bool {
+	loadBalancerLagTimeout := loadBalancerLagTimeoutDefault
+	if providerIs("aws") {
+		loadBalancerLagTimeout = loadBalancerLagTimeoutAWS
+	}
+	return testLoadBalancerReachableInTime(ingress, port, loadBalancerLagTimeout)
+}
+
+func testLoadBalancerReachableInTime(ingress api.LoadBalancerIngress, port int, timeout time.Duration) bool {
+	ip := ingress.IP
+	if ip == "" {
+		ip = ingress.Hostname
+	}
+
+	return testReachableInTime(conditionFuncDecorator(ip, port, testReachableHTTP, "/", "test-webserver"), timeout)
+
+}
+
+func conditionFuncDecorator(ip string, port int, fn func(string, int, string, string) (bool, error), request string, expect string) wait.ConditionFunc {
+	return func() (bool, error) {
+		return fn(ip, port, request, expect)
+	}
+}
+
+func testReachableInTime(testFunc wait.ConditionFunc, timeout time.Duration) bool {
+	By(fmt.Sprintf("Waiting up to %v", timeout))
+	err := wait.PollImmediate(poll, timeout, testFunc)
+	if err != nil {
+		Expect(err).NotTo(HaveOccurred(), "Error waiting")
+		return false
+	}
+	return true
+}
+
+func waitForLoadBalancerIngress(c *client.Client, serviceName, namespace string) (*api.Service, error) {
+	// TODO: once support ticket 21807001 is resolved, reduce this timeout
+	// back to something reasonable
+	const timeout = 20 * time.Minute
+	var service *api.Service
+	By(fmt.Sprintf("waiting up to %v for service %s in namespace %s to have a LoadBalancer ingress point", timeout, serviceName, namespace))
+	i := 1
+	for start := time.Now(); time.Since(start) < timeout; time.Sleep(3 * time.Second) {
+		service, err := c.Services(namespace).Get(serviceName)
+		if err != nil {
+			Logf("Get service failed, ignoring for 5s: %v", err)
+			continue
+		}
+		if len(service.Status.LoadBalancer.Ingress) > 0 {
+			return service, nil
+		}
+		if i%5 == 0 {
+			Logf("Waiting for service %s in namespace %s to have a LoadBalancer ingress point (%v)", serviceName, namespace, time.Since(start))
+		}
+		i++
+	}
+	return service, fmt.Errorf("service %s in namespace %s doesn't have a LoadBalancer ingress point after %.2f seconds", serviceName, namespace, timeout.Seconds())
 }

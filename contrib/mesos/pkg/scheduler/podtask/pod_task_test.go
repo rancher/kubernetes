@@ -17,6 +17,7 @@ limitations under the License.
 package podtask
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -24,9 +25,10 @@ import (
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/kubernetes/contrib/mesos/pkg/node"
-	mresource "k8s.io/kubernetes/contrib/mesos/pkg/scheduler/resource"
+	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/meta"
+	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/podtask/hostport"
+	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/resources"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
 )
 
 const (
@@ -34,108 +36,103 @@ const (
 	t_min_mem = 128
 )
 
-func fakePodTask(id string) (*T, error) {
-	return New(api.NewDefaultContext(), "", api.Pod{
-		ObjectMeta: api.ObjectMeta{
-			Name:      id,
-			Namespace: api.NamespaceDefault,
+func fakePodTask(id string, allowedRoles, defaultRoles []string) *T {
+	t, _ := New(
+		api.NewDefaultContext(),
+		Config{
+			Prototype:        &mesos.ExecutorInfo{},
+			FrameworkRoles:   allowedRoles,
+			DefaultPodRoles:  defaultRoles,
+			HostPortStrategy: hostport.StrategyWildcard,
 		},
-	}, &mesos.ExecutorInfo{})
+		&api.Pod{
+			ObjectMeta: api.ObjectMeta{
+				Name:      id,
+				Namespace: api.NamespaceDefault,
+			},
+		},
+	)
+
+	return t
 }
 
-func TestUnlimitedResources(t *testing.T) {
+func TestRoles(t *testing.T) {
 	assert := assert.New(t)
 
-	task, _ := fakePodTask("unlimited")
-	pod := &task.Pod
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Name: "a",
-			Ports: []api.ContainerPort{{
-				HostPort: 123,
-			}},
-			Resources: api.ResourceRequirements{
-				Limits: api.ResourceList{
-					api.ResourceCPU:    *resource.NewQuantity(3, resource.DecimalSI),
-					api.ResourceMemory: *resource.NewQuantity(768*1024*1024, resource.BinarySI),
-				},
+	for i, tt := range []struct {
+		annotations    map[string]string
+		frameworkRoles []string
+		want           []string
+	}{
+		{
+			map[string]string{},
+			nil,
+			starRole,
+		},
+		{
+			map[string]string{"other": "label"},
+			nil,
+			starRole,
+		},
+		{
+			map[string]string{meta.RolesKey: ""},
+			nil,
+			[]string{},
+		},
+		{
+			map[string]string{
+				"other":       "label",
+				meta.RolesKey: ",  , ,",
 			},
-		}, {
-			Name: "b",
-		}, {
-			Name: "c",
-		}},
+			nil,
+			[]string{},
+		},
+		{
+			map[string]string{meta.RolesKey: "forbiddenRole"},
+			[]string{"allowedRole"},
+			[]string{},
+		},
+		{
+			map[string]string{meta.RolesKey: "*, , *, ,slave_public,"},
+			[]string{"*", "slave_public"},
+			[]string{"*", "slave_public"},
+		},
+		{
+			map[string]string{meta.RolesKey: "role3,role2,role1"},
+			[]string{"role1", "role4"},
+			[]string{"role1"},
+		},
+		{
+			map[string]string{},
+			[]string{"role1"},
+			[]string{"*"},
+		},
+	} {
+		task := fakePodTask("test", tt.frameworkRoles, starRole)
+		task.Pod.ObjectMeta.Annotations = tt.annotations
+		assert.True(reflect.DeepEqual(task.Roles(), tt.want), "test #%d got %#v want %#v", i, task.Roles(), tt.want)
 	}
-
-	beforeLimitingCPU := mresource.CPUForPod(pod, mresource.DefaultDefaultContainerCPULimit)
-	beforeLimitingMem := mresource.MemForPod(pod, mresource.DefaultDefaultContainerMemLimit)
-
-	unboundedCPU := mresource.LimitPodCPU(pod, mresource.DefaultDefaultContainerCPULimit)
-	unboundedMem := mresource.LimitPodMem(pod, mresource.DefaultDefaultContainerMemLimit)
-
-	cpu := mresource.PodCPULimit(pod)
-	mem := mresource.PodMemLimit(pod)
-
-	assert.True(unboundedCPU, "CPU resources are defined as unlimited")
-	assert.True(unboundedMem, "mem resources are defined as unlimited")
-
-	assert.Equal(2*float64(mresource.DefaultDefaultContainerCPULimit)+3.0, float64(cpu))
-	assert.Equal(2*float64(mresource.DefaultDefaultContainerMemLimit)+768.0, float64(mem))
-
-	assert.Equal(cpu, beforeLimitingCPU)
-	assert.Equal(mem, beforeLimitingMem)
 }
 
-func TestLimitedResources(t *testing.T) {
-	assert := assert.New(t)
+type mockRegistry struct{}
 
-	task, _ := fakePodTask("limited")
-	pod := &task.Pod
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Name: "a",
-			Resources: api.ResourceRequirements{
-				Limits: api.ResourceList{
-					api.ResourceCPU:    *resource.NewQuantity(1, resource.DecimalSI),
-					api.ResourceMemory: *resource.NewQuantity(256*1024*1024, resource.BinarySI),
-				},
-			},
-		}, {
-			Name: "b",
-			Resources: api.ResourceRequirements{
-				Limits: api.ResourceList{
-					api.ResourceCPU:    *resource.NewQuantity(2, resource.DecimalSI),
-					api.ResourceMemory: *resource.NewQuantity(512*1024*1024, resource.BinarySI),
-				},
-			},
-		}},
+func (mr mockRegistry) New(nodename string, resources []*mesos.Resource) *mesos.ExecutorInfo {
+	return &mesos.ExecutorInfo{
+		Resources: resources,
 	}
+}
 
-	beforeLimitingCPU := mresource.CPUForPod(pod, mresource.DefaultDefaultContainerCPULimit)
-	beforeLimitingMem := mresource.MemForPod(pod, mresource.DefaultDefaultContainerMemLimit)
+func (mr mockRegistry) Get(nodename string) (*mesos.ExecutorInfo, error) {
+	panic("N/A")
+}
 
-	unboundedCPU := mresource.LimitPodCPU(pod, mresource.DefaultDefaultContainerCPULimit)
-	unboundedMem := mresource.LimitPodMem(pod, mresource.DefaultDefaultContainerMemLimit)
-
-	cpu := mresource.PodCPULimit(pod)
-	mem := mresource.PodMemLimit(pod)
-
-	assert.False(unboundedCPU, "CPU resources are defined as limited")
-	assert.False(unboundedMem, "mem resources are defined as limited")
-
-	assert.Equal(3.0, float64(cpu))
-	assert.Equal(768.0, float64(mem))
-
-	assert.Equal(cpu, beforeLimitingCPU)
-	assert.Equal(mem, beforeLimitingMem)
+func (mr mockRegistry) Invalidate(hostname string) {
+	panic("N/A")
 }
 
 func TestEmptyOffer(t *testing.T) {
 	t.Parallel()
-	task, err := fakePodTask("foo")
-	if err != nil {
-		t.Fatal(err)
-	}
+	task := fakePodTask("foo", nil, nil)
 
 	task.Pod.Spec = api.PodSpec{
 		Containers: []api.Container{{
@@ -143,23 +140,28 @@ func TestEmptyOffer(t *testing.T) {
 		}},
 	}
 
-	mresource.LimitPodCPU(&task.Pod, mresource.DefaultDefaultContainerCPULimit)
-	mresource.LimitPodMem(&task.Pod, mresource.DefaultDefaultContainerMemLimit)
+	defaultProc := NewDefaultProcurement(
+		&mesos.ExecutorInfo{
+			Resources: []*mesos.Resource{
+				mutil.NewScalarResource("cpus", 1.0),
+				mutil.NewScalarResource("mem", 64.0),
+			},
+		},
+		mockRegistry{},
+	)
 
-	if ok := DefaultPredicate(task, nil, nil); ok {
-		t.Fatalf("accepted nil offer")
-	}
-	if ok := DefaultPredicate(task, &mesos.Offer{}, nil); ok {
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(&mesos.Offer{}),
+	); err == nil {
 		t.Fatalf("accepted empty offer")
 	}
 }
 
 func TestNoPortsInPodOrOffer(t *testing.T) {
 	t.Parallel()
-	task, err := fakePodTask("foo")
-	if err != nil || task == nil {
-		t.Fatal(err)
-	}
+	task := fakePodTask("foo", nil, nil)
 
 	task.Pod.Spec = api.PodSpec{
 		Containers: []api.Container{{
@@ -167,8 +169,14 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 		}},
 	}
 
-	mresource.LimitPodCPU(&task.Pod, mresource.DefaultDefaultContainerCPULimit)
-	mresource.LimitPodMem(&task.Pod, mresource.DefaultDefaultContainerMemLimit)
+	executor := &mesos.ExecutorInfo{
+		Resources: []*mesos.Resource{
+			mutil.NewScalarResource("cpus", 1.0),
+			mutil.NewScalarResource("mem", 64.0),
+		},
+	}
+
+	defaultProc := NewDefaultProcurement(executor, mockRegistry{})
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
@@ -176,7 +184,12 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 			mutil.NewScalarResource("mem", 0.001),
 		},
 	}
-	if ok := DefaultPredicate(task, offer, nil); ok {
+
+	if err := defaultProc.Procure(
+		task,
+		nil,
+		NewProcureState(offer),
+	); err == nil {
 		t.Fatalf("accepted offer %v:", offer)
 	}
 
@@ -186,24 +199,39 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 			mutil.NewScalarResource("mem", t_min_mem),
 		},
 	}
-	if ok := DefaultPredicate(task, offer, nil); !ok {
+
+	if err := defaultProc.Procure(
+		task,
+		nil,
+		NewProcureState(offer),
+	); err != nil {
 		t.Fatalf("did not accepted offer %v:", offer)
 	}
 }
 
 func TestAcceptOfferPorts(t *testing.T) {
 	t.Parallel()
-	task, _ := fakePodTask("foo")
+	task := fakePodTask("foo", nil, nil)
 	pod := &task.Pod
+
+	defaultProc := NewDefaultProcurement(
+		&mesos.ExecutorInfo{},
+		mockRegistry{},
+	)
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
 			mutil.NewScalarResource("cpus", t_min_cpu),
 			mutil.NewScalarResource("mem", t_min_mem),
-			rangeResource("ports", []uint64{1, 1}),
+			resources.NewPorts("*", 1, 1),
 		},
 	}
-	if ok := DefaultPredicate(task, offer, nil); !ok {
+
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err != nil {
 		t.Fatalf("did not accepted offer %v:", offer)
 	}
 
@@ -215,20 +243,31 @@ func TestAcceptOfferPorts(t *testing.T) {
 		}},
 	}
 
-	mresource.LimitPodCPU(&task.Pod, mresource.DefaultDefaultContainerCPULimit)
-	mresource.LimitPodMem(&task.Pod, mresource.DefaultDefaultContainerMemLimit)
-
-	if ok := DefaultPredicate(task, offer, nil); ok {
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err == nil {
 		t.Fatalf("accepted offer %v:", offer)
 	}
 
 	pod.Spec.Containers[0].Ports[0].HostPort = 1
-	if ok := DefaultPredicate(task, offer, nil); !ok {
+
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err != nil {
 		t.Fatalf("did not accepted offer %v:", offer)
 	}
 
 	pod.Spec.Containers[0].Ports[0].HostPort = 0
-	if ok := DefaultPredicate(task, offer, nil); !ok {
+
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err != nil {
 		t.Fatalf("did not accepted offer %v:", offer)
 	}
 
@@ -236,12 +275,22 @@ func TestAcceptOfferPorts(t *testing.T) {
 		mutil.NewScalarResource("cpus", t_min_cpu),
 		mutil.NewScalarResource("mem", t_min_mem),
 	}
-	if ok := DefaultPredicate(task, offer, nil); ok {
+
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err == nil {
 		t.Fatalf("accepted offer %v:", offer)
 	}
 
 	pod.Spec.Containers[0].Ports[0].HostPort = 1
-	if ok := DefaultPredicate(task, offer, nil); ok {
+
+	if err := defaultProc.Procure(
+		task,
+		&api.Node{},
+		NewProcureState(offer),
+	); err == nil {
 		t.Fatalf("accepted offer %v:", offer)
 	}
 }
@@ -254,14 +303,14 @@ func TestGeneratePodName(t *testing.T) {
 		},
 	}
 	name := generateTaskName(p)
-	expected := "foo.bar.pods"
+	expected := "foo.bar.pod"
 	if name != expected {
 		t.Fatalf("expected %q instead of %q", expected, name)
 	}
 
 	p.Namespace = ""
 	name = generateTaskName(p)
-	expected = "foo.default.pods"
+	expected = "foo.default.pod"
 	if name != expected {
 		t.Fatalf("expected %q instead of %q", expected, name)
 	}
@@ -326,8 +375,13 @@ func TestNodeSelector(t *testing.T) {
 		{map[string]string{"some.other/label": "43"}, node3, true, "non-slave attribute matches"},
 	}
 
+	defaultProc := NewDefaultProcurement(
+		&mesos.ExecutorInfo{},
+		mockRegistry{},
+	)
+
 	for _, ts := range tests {
-		task, _ := fakePodTask("foo")
+		task := fakePodTask("foo", nil, nil)
 		task.Pod.Spec.NodeSelector = ts.selector
 		offer := &mesos.Offer{
 			Resources: []*mesos.Resource{
@@ -336,8 +390,16 @@ func TestNodeSelector(t *testing.T) {
 			},
 			Hostname: &ts.node.Name,
 		}
-		if got, want := DefaultPredicate(task, offer, ts.node), ts.ok; got != want {
-			t.Fatalf("expected acceptance of offer for selector %v to be %v, got %v: %q", ts.selector, want, got, ts.desc)
+
+		err := defaultProc.Procure(
+			task,
+			ts.node,
+			NewProcureState(offer),
+		)
+
+		ok := err == nil
+		if ts.ok != ok {
+			t.Fatalf("expected acceptance of offer for selector %v to be %v, got %v: %q", ts.selector, ts.ok, ok, ts.desc)
 		}
 	}
 }

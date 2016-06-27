@@ -23,10 +23,12 @@ import (
 	. "github.com/onsi/ginkgo"
 )
 
+// These tests exercise the Kubernetes expansion syntax $(VAR).
+// For more information, see: docs/design/expansion.md
 var _ = Describe("Variable Expansion", func() {
-	framework := NewFramework("var-expansion")
+	framework := NewDefaultFramework("var-expansion")
 
-	It("should allow composing env vars into new env vars", func() {
+	It("should allow composing env vars into new env vars [Conformance]", func() {
 		podName := "var-expansion-" + string(util.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -37,7 +39,7 @@ var _ = Describe("Variable Expansion", func() {
 				Containers: []api.Container{
 					{
 						Name:    "dapi-container",
-						Image:   "gcr.io/google_containers/busybox",
+						Image:   "gcr.io/google_containers/busybox:1.24",
 						Command: []string{"sh", "-c", "env"},
 						Env: []api.EnvVar{
 							{
@@ -66,7 +68,7 @@ var _ = Describe("Variable Expansion", func() {
 		})
 	})
 
-	It("should allow substituting values in a container's command", func() {
+	It("should allow substituting values in a container's command [Conformance]", func() {
 		podName := "var-expansion-" + string(util.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -77,7 +79,7 @@ var _ = Describe("Variable Expansion", func() {
 				Containers: []api.Container{
 					{
 						Name:    "dapi-container",
-						Image:   "gcr.io/google_containers/busybox",
+						Image:   "gcr.io/google_containers/busybox:1.24",
 						Command: []string{"sh", "-c", "TEST_VAR=wrong echo \"$(TEST_VAR)\""},
 						Env: []api.EnvVar{
 							{
@@ -96,7 +98,7 @@ var _ = Describe("Variable Expansion", func() {
 		})
 	})
 
-	It("should allow substituting values in a container's args", func() {
+	It("should allow substituting values in a container's args [Conformance]", func() {
 		podName := "var-expansion-" + string(util.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -107,7 +109,7 @@ var _ = Describe("Variable Expansion", func() {
 				Containers: []api.Container{
 					{
 						Name:    "dapi-container",
-						Image:   "gcr.io/google_containers/busybox",
+						Image:   "gcr.io/google_containers/busybox:1.24",
 						Command: []string{"sh", "-c"},
 						Args:    []string{"TEST_VAR=wrong echo \"$(TEST_VAR)\""},
 						Env: []api.EnvVar{
