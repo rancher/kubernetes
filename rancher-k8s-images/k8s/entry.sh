@@ -34,8 +34,13 @@ users:
 EOF
 fi
 
+CONTAINERIP=$(curl -s http://rancher-metadata/2015-12-19/self/container/ips/0)
+
 if [ "$1" == "kubelet" ]; then
     /usr/bin/share-mnt /var/lib/kubelet /sys -- kubelet-start.sh "$@"
+elif [ "$1" == "kube-apiserver" ]; then
+    set -- $@ "--advertise-address=$CONTAINERIP"
+    exec "$@"
 else
     exec "$@"
 fi
