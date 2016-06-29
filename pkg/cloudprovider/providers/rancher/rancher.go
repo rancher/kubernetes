@@ -658,10 +658,37 @@ func (r *CloudProvider) getHostByName(name string) (*Host, error) {
 		return nil, fmt.Errorf("Coudln't get host by name [%s]. Error: %#v", name, err)
 	}
 
+	foundMatch := false
+	var coll *client.IpAddressCollection
 	hostsToReturn := make([]client.Host, 0)
 	for _, host := range hosts.Data {
+		// This block is called if the hostname matches the nodename (without --hostname-override)
 		if strings.EqualFold(host.Hostname, name) {
 			hostsToReturn = append(hostsToReturn, host)
+			foundMatch = true
+		}
+		temp_coll, err := r.getIpAddressOfHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("Error getting ip addresses for node [%s]. Error: %#v", name, err)
+		}
+		if len(temp_coll.Data) == 0 {
+			return nil, cloudprovider.InstanceNotFound
+		}
+		for _, addrData := range temp_coll.Data {
+			// Ensure that the same host is not added twice. That can happen if the hostname is the ip address
+			// as both will match the nodename
+			if foundMatch {
+				break
+			}
+			// This block is called if the IP address matches the nodename (with --hostname-override to RANCHER_IP_ADDR)
+			if strings.EqualFold(addrData.Address, name) {
+				hostsToReturn = append(hostsToReturn, host)
+				foundMatch = true
+			}
+		}
+		if foundMatch {
+			coll = temp_coll
+			foundMatch = false
 		}
 	}
 
@@ -675,22 +702,21 @@ func (r *CloudProvider) getHostByName(name string) (*Host, error) {
 
 	rancherHost := &hostsToReturn[0]
 
-	coll := &client.IpAddressCollection{}
-	err = r.client.GetLink(rancherHost.Resource, "ipAddresses", coll)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting ip addresses for node [%s]. Error: %#v", name, err)
-	}
-
-	if len(coll.Data) == 0 {
-		return nil, cloudprovider.InstanceNotFound
-	}
-
 	host := &Host{
 		RancherHost: rancherHost,
 		IPAddresses: coll.Data,
 	}
 
 	return host, nil
+}
+
+func (r *CloudProvider) getIpAddressOfHost(host client.Host) (*client.IpAddressCollection, error) {
+	coll := &client.IpAddressCollection{}
+	err := r.client.GetLink(host.Resource, "ipAddresses", coll)
+	if err != nil {
+		return nil, err
+	}
+	return coll, nil
 }
 
 // --- Zones Functions ---
