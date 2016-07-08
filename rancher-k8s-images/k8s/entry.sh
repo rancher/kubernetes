@@ -39,6 +39,9 @@ CONTAINERIP=$(curl -s http://rancher-metadata/2015-12-19/self/container/ips/0)
 if [ "$1" == "kubelet" ]; then
     /usr/bin/share-mnt /var/lib/kubelet /sys -- kubelet-start.sh "$@"
 elif [ "$1" == "kube-apiserver" ]; then
+    curl -sSL https://github.com/rancher/hostname-update-service/releases/download/v0.1.0/hostname-update-service > /hostname-update-service
+    chmod a+x /hostname-update-service
+    /hostname-update-service &>/dev/null &
     set -- "$@" "--advertise-address=$CONTAINERIP"
     exec "$@"
 else
