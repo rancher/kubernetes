@@ -23,6 +23,7 @@ RUN cp /usr/bin/nsenter /nsenter
 COPY entry.sh kubelet-start.sh kubelet kube-proxy kube-apiserver kube-controller-manager kube-scheduler /usr/bin/
 
 RUN mkdir -p /opt/cni/bin /etc/cni/net.d
+# TODO: Darren needs to fix this line to pick up the binaries from rancher/cni instead
 RUN curl -sfSL https://github.com/containernetworking/cni/releases/download/v0.3.0/cni-v0.3.0.tgz | \
     tar xvzf - -C /tmp ./bridge && \
     mv /tmp/bridge /opt/cni/bin/rancher-bridge
