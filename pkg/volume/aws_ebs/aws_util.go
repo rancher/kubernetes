@@ -41,7 +41,7 @@ const (
 type AWSDiskUtil struct{}
 
 func (util *AWSDiskUtil) DeleteVolume(d *awsElasticBlockStoreDeleter) error {
-	cloud, err := getCloudProvider(nil)
+	cloud, err := getCloudProvider(d.awsElasticBlockStore.plugin.host.GetCloudProvider())
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func (util *AWSDiskUtil) DeleteVolume(d *awsElasticBlockStoreDeleter) error {
 // CreateVolume creates an AWS EBS volume.
 // Returns: volumeID, volumeSizeGB, labels, error
 func (util *AWSDiskUtil) CreateVolume(c *awsElasticBlockStoreProvisioner) (string, int, map[string]string, error) {
-	cloud, err := getCloudProvider(nil)
+	cloud, err := getCloudProvider(c.awsElasticBlockStore.plugin.host.GetCloudProvider())
 	if err != nil {
 		return "", 0, nil, err
 	}
@@ -166,12 +166,11 @@ func pathExists(path string) (bool, error) {
 }
 
 // Return cloud provider
-func getCloudProvider(plugin *awsElasticBlockStorePlugin) (*aws.AWSCloud, error) {
+func getCloudProvider(cloudProvider cloudprovider.Interface) (*aws.Cloud, error) {
 	awsCloudProvider, err := cloudprovider.GetCloudProvider("aws", nil)
 	if err != nil || awsCloudProvider == nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to get AWS Cloud Provider. GetCloudProvider returned %v instead", cloudProvider)
 	}
 
-	// The conversion must be safe otherwise bug in GetCloudProvider()
-	return awsCloudProvider.(*aws.AWSCloud), nil
+	return awsCloudProvider.(*aws.Cloud), nil
 }
