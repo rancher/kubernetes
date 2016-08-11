@@ -2862,7 +2862,6 @@ func (a *AWSCloud) getInstancesByNodeNamesCached(nodeNames sets.String) ([]*ec2.
 // Returns nil if it does not exist
 func (a *AWSCloud) findInstanceByNodeName(nodeName string) (*ec2.Instance, error) {
 	filters := []*ec2.Filter{
-		newEc2Filter("private-dns-name", nodeName),
 		newEc2Filter("instance-state-name", "running"),
 	}
 	filters = a.addFilters(filters)
@@ -2874,13 +2873,12 @@ func (a *AWSCloud) findInstanceByNodeName(nodeName string) (*ec2.Instance, error
 	if err != nil {
 		return nil, err
 	}
-	if len(instances) == 0 {
-		return nil, nil
+	for _, instance := range instances {
+		if strings.Contains(*instance.PrivateDnsName, nodeName) {
+			return instance, nil
+		}
 	}
-	if len(instances) > 1 {
-		return nil, fmt.Errorf("multiple instances found for name: %s", nodeName)
-	}
-	return instances[0], nil
+	return nil, nil
 }
 
 // Returns the instance with the specified node name

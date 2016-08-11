@@ -54,7 +54,7 @@ var (
 type GCEDiskUtil struct{}
 
 func (util *GCEDiskUtil) DeleteVolume(d *gcePersistentDiskDeleter) error {
-	cloud, err := getCloudProvider(nil)
+	cloud, err := getCloudProvider(d.gcePersistentDisk.plugin.host.GetCloudProvider())
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (util *GCEDiskUtil) DeleteVolume(d *gcePersistentDiskDeleter) error {
 // CreateVolume creates a GCE PD.
 // Returns: volumeID, volumeSizeGB, labels, error
 func (gceutil *GCEDiskUtil) CreateVolume(c *gcePersistentDiskProvisioner) (string, int, map[string]string, error) {
-	cloud, err := getCloudProvider(nil)
+	cloud, err := getCloudProvider(c.gcePersistentDisk.plugin.host.GetCloudProvider())
 	if err != nil {
 		return "", 0, nil, err
 	}
@@ -181,19 +181,17 @@ func pathExists(path string) (bool, error) {
 func getCloudProvider(cloudProvider cloudprovider.Interface) (*gcecloud.GCECloud, error) {
 	var err error
 	for numRetries := 0; numRetries < maxRetries; numRetries++ {
-		provider, err := cloudprovider.GetCloudProvider("gce", nil)
-		if err != nil {
-			return nil, err
-		}
-		gceCloudProvider, ok := provider.(*gcecloud.GCECloud)
-		if !ok || gceCloudProvider == nil {
+		gceCloudProvider, err := cloudprovider.GetCloudProvider("gce", nil)
+		if err != nil || gceCloudProvider == nil {
 			// Retry on error. See issue #11321
 			glog.Errorf("Failed to get GCE Cloud Provider. plugin.host.GetCloudProvider returned %v instead", cloudProvider)
 			time.Sleep(errorSleepDuration)
 			continue
 		}
-		return gceCloudProvider, nil
+
+		return gceCloudProvider.(*gcecloud.GCECloud), nil
 	}
+
 	return nil, fmt.Errorf("Failed to get GCE GCECloudProvider with error %v", err)
 }
 
