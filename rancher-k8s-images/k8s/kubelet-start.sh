@@ -2,4 +2,4 @@
 
 mount --rbind /host/dev /dev
 
-exec "$@"
+exec "$@" --hostname-override $(hostname --fqdn)
