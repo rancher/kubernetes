@@ -103,8 +103,9 @@ function setup-logrotate() {
 }
 EOF
 
-  # Configuration for k8s services that redirect logs to /var/log/<service>.log
-  # files. Whenever logrotate is ran, this config will:
+  # Configure log rotation for all logs in /var/log, which is where k8s services
+  # are configured to write their log files. Whenever logrotate is ran, this
+  # config will:
   # * rotate the log file if its size is > 100Mb OR if one day has elapsed
   # * save rotated logs into a gzipped timestamped backup
   # * log file timestamp (controlled by 'dateformat') includes seconds too. this
@@ -112,10 +113,8 @@ EOF
   #   (otherwise it skips rotation if 'maxsize' is reached multiple times in a
   #   day).
   # * keep only 5 old (rotated) logs, and will discard older logs.
-  local logrotate_files=( "kube-scheduler" "kube-proxy" "kube-apiserver" "kube-controller-manager" "kube-addons" )
-  for file in "${logrotate_files[@]}" ; do
-    cat > /etc/logrotate.d/${file} <<EOF
-/var/log/${file}.log {
+  cat > /etc/logrotate.d/allvarlogs <<EOF
+/var/log/*.log {
     rotate 5
     copytruncate
     missingok
@@ -128,7 +127,7 @@ EOF
     create 0644 root root
 }
 EOF
-  done
+
 }
 
 # Finds the master PD device; returns it in MASTER_PD_DEVICE
@@ -480,7 +479,10 @@ function start-kubelet {
     if [[ ! -z "${KUBELET_APISERVER:-}" && ! -z "${KUBELET_CERT:-}" && ! -z "${KUBELET_KEY:-}" ]]; then
       flags+=" --api-servers=https://${KUBELET_APISERVER}"
       flags+=" --register-schedulable=false"
-      flags+=" --pod-cidr=10.123.45.0/30"
+      # need at least a /29 pod cidr for now due to #32844
+      # TODO: determine if we still allow non-hostnetwork pods to run on master, clean up master pod setup
+      # WARNING: potential ip range collision with 10.123.45.0/29
+      flags+=" --pod-cidr=10.123.45.0/29"
       reconcile_cidr="false"
     else
       flags+=" --pod-cidr=${MASTER_IP_RANGE}"
@@ -1118,6 +1120,13 @@ function start-rescheduler {
   fi
 }
 
+# Setup working directory for kubelet.
+function setup-kubelet-dir {
+    echo "Making /var/lib/kubelet executable for kubelet"
+    mount --bind /var/lib/kubelet /var/lib/kubelet/
+    mount -B -o remount,exec,suid,dev /var/lib/kubelet    
+}
+
 function reset-motd {
   # kubelet is installed both on the master and nodes, and the version is easy to parse (unlike kubectl)
   local -r version="$("${KUBE_HOME}"/bin/kubelet --version=true | cut -f2 -d " ")"
@@ -1175,6 +1184,7 @@ fi
 
 config-ip-firewall
 create-dirs
+setup-kubelet-dir
 ensure-local-ssds
 setup-logrotate
 if [[ "${KUBERNETES_MASTER:-}" == "true" ]]; then
