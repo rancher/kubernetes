@@ -717,8 +717,9 @@ func (r *CloudProvider) getHostByName(name string) (*Host, error) {
 	}
 
 	hostsToReturn := make([]client.Host, 0)
+	hostname := strings.Split(name, ".")[0]
 	for _, host := range hosts.Data {
-		if strings.EqualFold(host.Hostname, name) {
+		if strings.EqualFold(host.Hostname, hostname) {
 			hostsToReturn = append(hostsToReturn, host)
 		}
 	}
