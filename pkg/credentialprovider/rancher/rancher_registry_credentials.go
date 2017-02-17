@@ -39,16 +39,9 @@ type registryCredential struct {
 	serverIP   string
 }
 
+var rancherGetter = &rancherCredentialsGetter{}
+
 func init() {
-	client, err := getRancherClient()
-	if err != nil {
-		glog.Errorf("Failed to get rancher client: %v", err)
-	}
-
-	rancherGetter := &rancherCredentialsGetter{
-		client: client,
-	}
-
 	credentialprovider.RegisterCredentialProvider("rancher-registry-creds",
 		&credentialprovider.CachingDockerConfigProvider{
 			Provider: &rancherProvider{rancherGetter},
@@ -58,7 +51,17 @@ func init() {
 
 // Assuming it's always enabled
 func (p *rancherProvider) Enabled() bool {
-	return p.credGetter != nil
+	client, err := getRancherClient()
+	if err != nil {
+		glog.Errorf("Failed to get rancher client: %v", err)
+		return false
+	}
+	if client == nil {
+		return false
+	}
+
+	rancherGetter.client = client
+	return true
 }
 
 // LazyProvide implements DockerConfigProvider. Should never be called.
