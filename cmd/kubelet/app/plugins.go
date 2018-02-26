@@ -20,15 +20,15 @@ package app
 import (
 	// Credential providers
 	_ "k8s.io/kubernetes/pkg/credentialprovider/aws"
-	_ "k8s.io/kubernetes/pkg/credentialprovider/azure"
+	//_ "k8s.io/kubernetes/pkg/credentialprovider/azure"
 	_ "k8s.io/kubernetes/pkg/credentialprovider/gcp"
 	_ "k8s.io/kubernetes/pkg/credentialprovider/rancher"
 	"k8s.io/utils/exec"
 	// Volume plugins
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
-	"k8s.io/kubernetes/pkg/volume/azure_dd"
-	"k8s.io/kubernetes/pkg/volume/azure_file"
+	//"k8s.io/kubernetes/pkg/volume/azure_dd"
+	//"k8s.io/kubernetes/pkg/volume/azure_file"
 	"k8s.io/kubernetes/pkg/volume/cephfs"
 	"k8s.io/kubernetes/pkg/volume/cinder"
 	"k8s.io/kubernetes/pkg/volume/configmap"
@@ -87,10 +87,10 @@ func ProbeVolumePlugins() []volume.VolumePlugin {
 	allPlugins = append(allPlugins, downwardapi.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, fc.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, flocker.ProbeVolumePlugins()...)
-	allPlugins = append(allPlugins, azure_file.ProbeVolumePlugins()...)
+	//allPlugins = append(allPlugins, azure_file.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, configmap.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, vsphere_volume.ProbeVolumePlugins()...)
-	allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
+	//allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, photon_pd.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, projected.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, portworx.ProbeVolumePlugins()...)
