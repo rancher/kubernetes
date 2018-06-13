@@ -82,7 +82,7 @@ import (
 	extensionsinternal "k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/conditions"
-	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure"
+	// "k8s.io/kubernetes/pkg/cloudprovider/providers/azure"
 	gcecloud "k8s.io/kubernetes/pkg/cloudprovider/providers/gce"
 	"k8s.io/kubernetes/pkg/controller"
 	nodectlr "k8s.io/kubernetes/pkg/controller/node"
@@ -4959,13 +4959,13 @@ func CreateEmptyFileOnPod(namespace string, podName string, filePath string) err
 }
 
 // GetAzureCloud returns azure cloud provider
-func GetAzureCloud() (*azure.Cloud, error) {
-	cloud, ok := TestContext.CloudConfig.Provider.(*azure.Cloud)
-	if !ok {
-		return nil, fmt.Errorf("failed to convert CloudConfig.Provider to Azure: %#v", TestContext.CloudConfig.Provider)
-	}
-	return cloud, nil
-}
+//func GetAzureCloud() (*azure.Cloud, error) {
+//	cloud, ok := TestContext.CloudConfig.Provider.(*azure.Cloud)
+//	if !ok {
+//		return nil, fmt.Errorf("failed to convert CloudConfig.Provider to Azure: %#v", TestContext.CloudConfig.Provider)
+//	}
+//	return cloud, nil
+//}
 
 func PrintSummaries(summaries []TestDataSummary, testBaseName string) {
 	now := time.Now()
