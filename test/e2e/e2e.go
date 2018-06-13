@@ -34,7 +34,7 @@ import (
 	runtimeutils "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/util/logs"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure"
+	// "k8s.io/kubernetes/pkg/cloudprovider/providers/azure"
 	gcecloud "k8s.io/kubernetes/pkg/cloudprovider/providers/gce"
 	"k8s.io/kubernetes/pkg/version"
 	commontest "k8s.io/kubernetes/test/e2e/common"
@@ -120,7 +120,7 @@ func setupProviderConfig() error {
 				cloudConfig.ConfigFile, err)
 		}
 		defer config.Close()
-		cloudConfig.Provider, err = azure.NewCloud(config)
+		// cloudConfig.Provider, err = azure.NewCloud(config)
 	}
 
 	return nil
