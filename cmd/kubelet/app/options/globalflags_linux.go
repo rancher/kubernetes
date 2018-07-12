@@ -23,15 +23,14 @@ import (
 	"os"
 
 	"github.com/spf13/pflag"
-
 	// ensure libs have a chance to globally register their flags
-	_ "github.com/google/cadvisor/container/common"
-	_ "github.com/google/cadvisor/container/containerd"
-	_ "github.com/google/cadvisor/container/docker"
-	_ "github.com/google/cadvisor/container/raw"
-	_ "github.com/google/cadvisor/machine"
-	_ "github.com/google/cadvisor/manager"
-	_ "github.com/google/cadvisor/storage"
+	//_ "github.com/google/cadvisor/container/common"
+	//_ "github.com/google/cadvisor/container/containerd"
+	//_ "github.com/google/cadvisor/container/docker"
+	//_ "github.com/google/cadvisor/container/raw"
+	//_ "github.com/google/cadvisor/machine"
+	//_ "github.com/google/cadvisor/manager"
+	//_ "github.com/google/cadvisor/storage"
 )
 
 // addCadvisorFlags adds flags from cadvisor
