@@ -30,7 +30,7 @@ import (
 
 	// ensure libs have a chance to globally register their flags
 	_ "github.com/golang/glog"
-	_ "k8s.io/kubernetes/pkg/credentialprovider/azure"
+	//_ "k8s.io/kubernetes/pkg/credentialprovider/azure"
 	_ "k8s.io/kubernetes/pkg/credentialprovider/gcp"
 )
 
@@ -89,7 +89,7 @@ func addCredentialProviderFlags(fs *pflag.FlagSet) {
 	pflagRegister(global, local, "google-json-key")
 	// TODO(#58034): This is not a static file, so it's not quite as straightforward as --google-json-key.
 	// We need to figure out how ACR users can dynamically provide pull credentials before we can deprecate this.
-	pflagRegister(global, local, "azure-container-registry-config")
+	//pflagRegister(global, local, "azure-container-registry-config")
 
 	fs.AddFlagSet(local)
 }
