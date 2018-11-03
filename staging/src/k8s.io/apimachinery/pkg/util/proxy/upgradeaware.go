@@ -241,9 +241,10 @@ func (h *UpgradeAwareHandler) tryUpgrade(w http.ResponseWriter, req *http.Reques
 	}
 
 	var (
-		backendConn net.Conn
-		rawResponse []byte
-		err         error
+		backendConn     net.Conn
+		rawResponse     []byte
+		rawResponseCode int
+		err             error
 	)
 
 	location := *h.Location
@@ -259,7 +260,7 @@ func (h *UpgradeAwareHandler) tryUpgrade(w http.ResponseWriter, req *http.Reques
 	utilnet.AppendForwardedForHeader(clone)
 	if h.InterceptRedirects {
 		glog.V(6).Infof("Connecting to backend proxy (intercepting redirects) %s\n  Headers: %v", &location, clone.Header)
-		backendConn, rawResponse, err = utilnet.ConnectWithRedirects(req.Method, &location, clone.Header, req.Body, utilnet.DialerFunc(h.DialForUpgrade), h.RequireSameHostRedirects)
+		backendConn, rawResponse, rawResponseCode, err = utilnet.ConnectWithRedirects(h.InterceptRedirects, req.Method, &location, clone.Header, req.Body, utilnet.DialerFunc(h.DialForUpgrade), h.RequireSameHostRedirects)
 	} else {
 		glog.V(6).Infof("Connecting to backend proxy (direct dial) %s\n  Headers: %v", &location, clone.Header)
 		clone.URL = &location
@@ -330,6 +331,10 @@ func (h *UpgradeAwareHandler) tryUpgrade(w http.ResponseWriter, req *http.Reques
 	// the other half of the connection in the defer.
 	writerComplete := make(chan struct{})
 	readerComplete := make(chan struct{})
+
+	if rawResponseCode != http.StatusSwitchingProtocols {
+		return true
+	}
 
 	go func() {
 		var writer io.WriteCloser

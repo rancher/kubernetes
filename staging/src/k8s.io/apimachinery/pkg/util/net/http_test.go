@@ -414,7 +414,7 @@ func TestConnectWithRedirects(t *testing.T) {
 				}
 				return conn, err
 			})
-			conn, rawResponse, err := ConnectWithRedirects(method, u, http.Header{} /*body*/, nil, dialer, true)
+			conn, rawResponse, _, err := ConnectWithRedirects(true, method, u, http.Header{} /*body*/, nil, dialer, true)
 			if test.expectError {
 				require.Error(t, err, "expected request error")
 				return
