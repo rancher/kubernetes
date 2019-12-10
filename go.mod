@@ -66,7 +66,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20160516000752-02826c3e7903
 	github.com/golang/mock v1.2.0
 	github.com/golang/protobuf v1.3.1
-	github.com/google/cadvisor v0.34.0
+	github.com/google/cadvisor v0.35.0
 	github.com/google/certificate-transparency-go v1.0.21 // indirect
 	github.com/google/go-cmp v0.3.0
 	github.com/google/gofuzz v1.0.0
