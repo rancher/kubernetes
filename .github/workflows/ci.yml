@@ -1,0 +1,30 @@
+name: Dapper CI on PR
+run-name: CI on ${{ github.event_name }}
+
+on:
+  pull_request:
+  push:
+    branches:
+      - '*'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    container:
+      image: rancher/dapper:v0.6.0
+    permissions:
+      contents: read
+    steps:
+      - name: Fix the not-a-git-repository issue
+        run: |
+          apk -U add git
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: build with Dapper
+        run: dapper ci
+
+      - name: LS the bin
+        run: ls -lR output/bin
