@@ -17,11 +17,9 @@ limitations under the License.
 package cadvisor
 
 import (
-	"strings"
-
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapi2 "github.com/google/cadvisor/info/v2"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 )
@@ -30,9 +28,9 @@ const (
 	// CrioSocketSuffix is the path to the CRI-O socket.
 	// Please keep this in sync with the one in:
 	// github.com/google/cadvisor/tree/master/container/crio/client.go
-	// Note that however we only match on the suffix, as /var/run is often a
-	// symlink to /run, so the user can specify either path.
-	CrioSocketSuffix = "run/crio/crio.sock"
+	CrioSocket           = "/var/run/crio/crio.sock"
+	CriDockerdSocketv123 = "/var/run/dockershim.sock"
+	CriDockerdSocketv124 = "/var/run/cri-dockerd.sock"
 )
 
 // CapacityFromMachineInfo returns the capacity of the resources from the machine info.
@@ -72,6 +70,12 @@ func EphemeralStorageCapacityFromFsInfo(info cadvisorapi2.FsInfo) v1.ResourceLis
 // TODO: cri-o relies on cadvisor as a temporary workaround. The code should
 // be removed. Related issue:
 // https://github.com/kubernetes/kubernetes/issues/51798
+// Related issue for cri-dockerd: https://github.com/Mirantis/cri-dockerd/issues/135
 func UsingLegacyCadvisorStats(runtimeEndpoint string) bool {
-	return strings.HasSuffix(runtimeEndpoint, CrioSocketSuffix)
+	return UsingCriDockerdSocket(runtimeEndpoint) || runtimeEndpoint == CrioSocket || runtimeEndpoint == "unix://"+CrioSocket
+}
+
+func UsingCriDockerdSocket(runtimeEndpoint string) bool {
+	return runtimeEndpoint == "unix://"+CriDockerdSocketv124 || runtimeEndpoint == CriDockerdSocketv124 ||
+		runtimeEndpoint == CriDockerdSocketv123 || runtimeEndpoint == "unix://"+CriDockerdSocketv123
 }
