@@ -10,8 +10,8 @@ KUBE_BUILD_PLATFORMS="linux/arm64 linux/amd64"
 K8S_BASE="k8s.io/component-base"
 
 mkdir -p output/bin
-if [ -n "$DRONE_TAG" ]; then
-    TAG=$DRONE_TAG
+if [ -n "$VERSION" ]; then
+    TAG=$VERSION
 fi
 
 buildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -31,6 +31,8 @@ for ARCH in ${OS_ARCH_LINUX}; do
         fi
         tar -cvzf output/bin/kubelet-$TAG-$ARCH.tar.gz kubelet && rm kubelet
 done
+
+sha256sum output/bin/* > output/bin/sha256sum.txt
 
 rm -rf _output/
 
