@@ -10,6 +10,7 @@ jobs:
     runs-on: runs-on,runner=4cpu-linux-x64,run-id=${{ github.run_id }}
     permissions:
       id-token: write
+      contents: write
     outputs:
       new-release-branches: ${{ steps.create-release-branches.outputs.NEW_RELEASE_BRANCHES }}
     steps:
