@@ -1,5 +1,3 @@
-= vendor/github.com/blang/semver/v4 licensed under: =
-
 The MIT License
 
 Copyright (c) 2014 Benedikt Lang <github at benediktlang.de>
@@ -22,5 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-
-= vendor/github.com/blang/semver/LICENSE 5a3ade42a900439691ebc22013660cae
