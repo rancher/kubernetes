@@ -51,15 +51,17 @@ done
 # Print the new tags
 if [ ${#new_tags[@]} -eq 0 ]; then
     echo "[ERROR] No new tags found in upstream kubernetes."
-    exit 1
+    # Set an empty NEW_TAGS environment variable
+    echo "NEW_TAGS=" >> $GITHUB_ENV
+    exit 0
 else
     echo "[INFO] New tags to create branches in rancher/kubernetes:"
     for tag in "${new_tags[@]}"; do
         echo "- $tag"
     done
-fi
 
-echo "NEW_TAGS=${new_tags[@]}" >> $GITHUB_ENV
+    echo "NEW_TAGS=${new_tags[@]}" >> $GITHUB_ENV
+fi
 
 # Clean up temporary files
 rm -f "$rancher_tags_file" "$upstream_tags_file"

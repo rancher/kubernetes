@@ -3,7 +3,7 @@ name: Sync with Kubernetes releases and cherry-pick Rancher-specific changes
 on:
   schedule:
     - cron: "0 0 * * *" # Runs daily at midnight
-  workflow_dispatch:
+  workflow_dispatch:  
 
 jobs:
   create-branches:
@@ -45,6 +45,7 @@ jobs:
 
       - name: Create new release branches in rancher/kubernetes
         id: create-release-branches
+        if: ${{ env.NEW_TAGS != '' }}  # Run only if there are new tags
         run: |
           cd rancher-k8s
           $GITHUB_WORKSPACE/rancher-k8s/scripts/create-release-branch.sh
@@ -62,6 +63,7 @@ jobs:
   build-and-validate:
     needs: create-branches
     runs-on: runs-on,runner=4cpu-linux-x64,run-id=${{ github.run_id }}
+    if: ${{ needs.create-branches.outputs.new-release-branches != '[]' && needs.create-branches.outputs.new-release-branches != '' }}
     container:
       image: rancher/dapper:v0.6.0
     permissions:
