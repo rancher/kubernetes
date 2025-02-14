@@ -115,6 +115,34 @@ github.com/davecgh/go-spew/spew
 # github.com/distribution/reference v0.6.0
 ## explicit; go 1.20
 github.com/distribution/reference
+# github.com/docker/docker v26.1.4+incompatible
+## explicit
+github.com/docker/docker/api
+github.com/docker/docker/api/types
+github.com/docker/docker/api/types/blkiodev
+github.com/docker/docker/api/types/checkpoint
+github.com/docker/docker/api/types/container
+github.com/docker/docker/api/types/events
+github.com/docker/docker/api/types/filters
+github.com/docker/docker/api/types/image
+github.com/docker/docker/api/types/mount
+github.com/docker/docker/api/types/network
+github.com/docker/docker/api/types/registry
+github.com/docker/docker/api/types/strslice
+github.com/docker/docker/api/types/swarm
+github.com/docker/docker/api/types/swarm/runtime
+github.com/docker/docker/api/types/system
+github.com/docker/docker/api/types/time
+github.com/docker/docker/api/types/versions
+github.com/docker/docker/api/types/volume
+github.com/docker/docker/client
+github.com/docker/docker/errdefs
+github.com/docker/docker/internal/multierror
+# github.com/docker/go-connections v0.5.0
+## explicit; go 1.18
+github.com/docker/go-connections/nat
+github.com/docker/go-connections/sockets
+github.com/docker/go-connections/tlsconfig
 # github.com/docker/go-units v0.5.0
 ## explicit
 github.com/docker/go-units
@@ -233,6 +261,9 @@ github.com/google/cadvisor/container/containerd/namespaces
 github.com/google/cadvisor/container/containerd/pkg/dialer
 github.com/google/cadvisor/container/crio
 github.com/google/cadvisor/container/crio/install
+github.com/google/cadvisor/container/docker
+github.com/google/cadvisor/container/docker/install
+github.com/google/cadvisor/container/docker/utils
 github.com/google/cadvisor/container/libcontainer
 github.com/google/cadvisor/container/raw
 github.com/google/cadvisor/container/systemd
@@ -260,6 +291,7 @@ github.com/google/cadvisor/utils/sysfs
 github.com/google/cadvisor/utils/sysinfo
 github.com/google/cadvisor/version
 github.com/google/cadvisor/watcher
+github.com/google/cadvisor/zfs
 # github.com/google/cel-go v0.22.0
 ## explicit; go 1.21.1
 github.com/google/cel-go/cel
@@ -382,6 +414,9 @@ github.com/mistifyio/go-zfs
 # github.com/mitchellh/go-wordwrap v1.0.1
 ## explicit; go 1.14
 github.com/mitchellh/go-wordwrap
+# github.com/moby/docker-image-spec v1.3.1
+## explicit; go 1.18
+github.com/moby/docker-image-spec/specs-go/v1
 # github.com/moby/ipvs v1.1.0
 ## explicit; go 1.17
 github.com/moby/ipvs
@@ -460,6 +495,10 @@ github.com/onsi/gomega/types
 # github.com/opencontainers/go-digest v1.0.0
 ## explicit; go 1.13
 github.com/opencontainers/go-digest
+# github.com/opencontainers/image-spec v1.1.0
+## explicit; go 1.18
+github.com/opencontainers/image-spec/specs-go
+github.com/opencontainers/image-spec/specs-go/v1
 # github.com/opencontainers/runc v1.2.1
 ## explicit; go 1.22
 github.com/opencontainers/runc/libcontainer/cgroups
