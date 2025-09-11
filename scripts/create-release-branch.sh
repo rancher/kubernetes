@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e
-
+MAX_VERSION="v1.33.0"
 NEW_RELEASE_BRANCHES=()
 
 # Define temporary files
@@ -31,6 +31,12 @@ git fetch --tags --quiet upstream || true
 
 # Process each tag
 for tag in $NEW_TAGS; do
+    # Skip if tag > MAX_VERSION
+    if [[ "$(printf '%s\n' "$tag" "$MAX_VERSION" | sort -V | tail -1)" == "$tag" ]]; then
+        echo "[INFO] Skipping version $tag as it is >= $MAX_VERSION"
+        continue
+    fi
+
     echo "========================================================================================"
     echo "[INFO] Processing version: ${tag}"
     
