@@ -45,12 +45,6 @@ for tag in $NEW_TAGS; do
         echo "[WARN] Tag $tag does not exist locally. Skipping."
         continue
     fi
-
-    # Now safe to checkout the branch
-    if ! git checkout -qb "release-${tag}" "$tag"; then
-        echo "[WARN] Could not checkout a local branch release-${tag} from the upstream tag ${tag}."
-        continue
-    fi
     
     # Check if the branch already exist
     if git show-ref --verify --quiet refs/remotes/origin/release-${tag}; then
