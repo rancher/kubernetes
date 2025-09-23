@@ -26,13 +26,13 @@ if ! git remote get-url upstream &>/dev/null; then
     git remote add "upstream" https://github.com/kubernetes/kubernetes.git
 fi
 
-# Fetch upstream tags
-git fetch --tags --quiet upstream || true
-
 # Process each tag
 for tag in $NEW_TAGS; do
     echo "========================================================================================"
     echo "[INFO] Processing version: ${tag}"
+
+    # Fetch the specific tag from upstream
+    git fetch upstream refs/tags/${tag}:refs/tags/${tag} --no-tags
 
     # Skip if tag > MAX_VERSION
     if [[ "$(printf '%s\n' "$tag" "$MAX_VERSION" | sort -V | tail -1)" == "$tag" ]]; then
