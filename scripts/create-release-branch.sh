@@ -39,12 +39,6 @@ for tag in $NEW_TAGS; do
         echo "[INFO] Skipping version $tag as it is >= $MAX_VERSION"
         continue
     fi
-
-    # Skip if the tag does not exist locally
-    if ! git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
-        echo "[WARN] Tag $tag does not exist locally. Skipping."
-        continue
-    fi
     
     # Check if the branch already exist
     if git show-ref --verify --quiet refs/remotes/origin/release-${tag}; then
