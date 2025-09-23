@@ -27,7 +27,7 @@ if ! git remote get-url upstream &>/dev/null; then
 fi
 
 # Fetch upstream tags
-git fetch --tags --quiet --force upstream || true
+git fetch --tags --quiet upstream || true
 
 # Process each tag
 for tag in $NEW_TAGS; do
