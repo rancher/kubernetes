@@ -126,8 +126,7 @@ echo "==========================================================================
 
 # Print the new branches
 if [ ${#NEW_RELEASE_BRANCHES[@]} -eq 0 ]; then
-    echo "[ERROR] No new release branches."
-    exit 1
+    echo "[INFO] No new release branches."
 else
     echo "[INFO] New release branches:"
     for branch in "${NEW_RELEASE_BRANCHES[@]}"; do
