@@ -4,7 +4,10 @@ ARG DAPPER_HOST_ARCH
 ARG DEBIAN_FRONTEND=noninteractive
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
 
-RUN zypper install -y -f docker rsync awk
+RUN zypper clean -a && \
+    zypper refresh && \
+    zypper install --no-recommends -y -f docker rsync awk 
+
 COPY --from=docker/buildx-bin:0.10.2 /buildx /usr/libexec/docker/cli-plugins/docker-buildx
 
 ENV DAPPER_SOURCE /go/src/github.com/rancher/kubernetes/
@@ -16,4 +19,3 @@ ENV HOME ${DAPPER_SOURCE}
 WORKDIR ${DAPPER_SOURCE}
 ENTRYPOINT ["./scripts/entry"]
 CMD ["ci"]
-
